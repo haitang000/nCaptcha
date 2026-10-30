@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "portable-captcha",
+  "account_id": "90ca22f8f5ccac399f84d19993b4b989",
+  "workers_dev": true,
+  "routes": [{ "pattern": "captcha.haitang000.cn", "custom_domain": true }],
+  "main": "workers/index.js",
+  "compatibility_date": "2026-10-01",
+  "build": { "command": "npm run build:workers" },
+  "assets": { "directory": "./dist", "binding": "ASSETS", "run_worker_first": true },
+  "durable_objects": { "bindings": [{ "name": "CAPTCHA_STATE", "class_name": "CaptchaDurableObject" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CaptchaDurableObject"] }],
+  "vars": {
+    "CAPTCHA_ALLOWED_ORIGINS": "https://captcha.haitang000.cn,https://portable-captcha.crashv.workers.dev,http://127.0.0.1:8789,http://localhost:8789",
+    "CAPTCHA_MODE": "strict",
+    "CAPTCHA_POW_BITS": "20"
+  },
+  "dev": { "ip": "127.0.0.1", "port": 8789 }
+}

@@ -1,0 +1,15 @@
+node_modules/
+.env
+*.tgz
+test-results/
+playwright-report/
+.package-check/
+.wrangler/
+.workers/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env.*
+!.env.example
+.deployment/
+*.log

@@ -1,0 +1,13 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadPuzzles } from '../src/images.js';
+await import('./build.js');
+const root = fileURLToPath(new URL('../', import.meta.url));
+const args = process.argv.slice(2);
+if (args.length && (args.length !== 2 || args[0] !== '--images-dir')) throw new Error('用法：npm run build:workers -- [--images-dir <目录>]');
+const puzzles = loadPuzzles(args.length ? path.resolve(args[1]) : path.join(root, 'assets/puzzles'));
+if (!puzzles.length) throw new Error('未找到可用 PNG 题图');
+await fs.mkdir(path.join(root, '.workers'), { recursive: true });
+await fs.writeFile(path.join(root, '.workers/puzzles.js'), '// 构建时解码的私有题库；不能放入公开 assets 目录。\nexport default ' + JSON.stringify(puzzles.map(({ rgba, ...image }) => ({ ...image, rgba: rgba.toString('base64') }))) + ';\n');
+console.log(`Workers 题库已打包：${puzzles.length} 张，无运行时文件读取。`);

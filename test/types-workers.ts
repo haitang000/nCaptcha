@@ -1,0 +1,12 @@
+import worker, { createWorkerHandler, CaptchaDurableObject, type WorkerEnv } from 'portable-captcha/workers';
+import { createFetchHandler } from 'portable-captcha/fetch';
+import type { CaptchaInstance } from 'portable-captcha';
+declare const env: WorkerEnv;
+declare const engine: CaptchaInstance;
+const request = new Request('https://captcha.example/health');
+const response: Response = await worker.fetch(request, env);
+await createWorkerHandler().fetch(request, env);
+await env.CAPTCHA_STATE.get(env.CAPTCHA_STATE.idFromName('192.0.2.1')).execute('createPow', { ip: '192.0.2.1' });
+createFetchHandler(engine, { getIp: () => '192.0.2.1' });
+const objectType: typeof CaptchaDurableObject = CaptchaDurableObject;
+console.log(response.status, objectType);

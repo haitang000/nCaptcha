@@ -1,0 +1,73 @@
+{
+  "name": "portable-captcha",
+  "version": "0.2.0",
+  "private": true,
+  "description": "可自托管、零运行时依赖的行为分析、PoW 与图片回正验证码",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    },
+    "./http": {
+      "types": "./src/http.d.ts",
+      "import": "./src/http.js"
+    },
+    "./fetch": {
+      "types": "./src/fetch.d.ts",
+      "import": "./src/fetch.js"
+    },
+    "./workers": {
+      "types": "./workers/index.d.ts",
+      "import": "./workers/index.js"
+    },
+    "./client": {
+      "types": "./src/client/index.d.ts",
+      "import": "./dist/captcha.esm.js"
+    },
+    "./dist/*": "./dist/*"
+  },
+  "files": [
+    "src",
+    "assets",
+    "dist",
+    "examples",
+    "workers",
+    ".workers/puzzles.js",
+    "wrangler.jsonc",
+    ".dev.vars.example",
+    ".env.example",
+    "docs",
+    "README.md",
+    "NOTICE.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.js",
+    "build:workers": "node scripts/build-workers.js",
+    "workers:dev": "wrangler dev",
+    "workers:check": "wrangler deploy --dry-run --outdir .workers/bundle",
+    "workers:deploy": "wrangler deploy",
+    "test": "node --test test/*.test.js",
+    "test:browser": "playwright test",
+    "test:workers": "node --test test/workers/*.test.js",
+    "test:types:workers": "tsc --noEmit --strict --module NodeNext --target ES2022 --lib ES2022 --types @cloudflare/workers-types test/types-workers.ts",
+    "test:types": "tsc --noEmit --strict --module NodeNext --target ES2022 --lib ES2022,DOM test/types.ts",
+    "test:package": "node scripts/check-package.js",
+    "start": "node src/server.js",
+    "demo": "node examples/embedded/server.js",
+    "demo:standalone": "node examples/standalone/server.js",
+    "prepack": "npm run build:workers"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261029.1",
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261023.2-beta",
+    "typescript": "^5.9.3",
+    "wrangler": "4.155.0"
+  }
+}
