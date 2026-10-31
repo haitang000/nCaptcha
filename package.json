@@ -40,8 +40,7 @@
     ".dev.vars.example",
     ".env.example",
     "docs",
-    "README.md",
-    "NOTICE.md"
+    "README.md"
   ],
   "scripts": {
     "build": "node scripts/build.js",
