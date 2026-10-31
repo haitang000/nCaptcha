@@ -28,7 +28,8 @@ export interface CaptchaOptions {
 export interface CaptchaInstance {
   createPow(context: Context): Promise<Pow>;
   verifyBehavior(input: Context & { pow?: { prefix: string; nonce: string }; trajectory?: Point[] | null; formBehavior?: FormBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
-  solveChallenge(input: Context & { id: string; angle: number; pointer?: Pointer }): Promise<TokenResult>;
+  /** 鼠标/触屏/笔需提交本轮图片挑战轨迹；键盘操作使用 pointer: 'keyboard'。 */
+  solveChallenge(input: Context & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; hints?: Hints | null }): Promise<TokenResult>;
   cancelChallenge(input: Context & { id: string }): Promise<boolean>;
   consumeToken(input: Context & { token: string }): Promise<boolean>;
   setMode(mode: Mode): void;

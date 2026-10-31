@@ -68,7 +68,7 @@ PoW、挑战、尝试次数、限流、失败声誉和令牌都保存在 SQLite 
 npm run build:workers -- --images-dir ./private-puzzles
 ```
 
-本地也支持绝对路径；云端 CI 应使用随源码提供的相对目录。无有效 PNG 时构建失败。`CAPTCHA_IMAGES_DIR` 仅适用于 Node 服务，Workers 不读取服务器目录。内置四张图片属于公开示例素材，可换成自己的题库。
+本地也支持绝对路径；云端 CI 应使用随源码提供的相对目录。无有效 PNG 时构建失败。`CAPTCHA_IMAGES_DIR` 仅适用于 Node 服务，Workers 不读取服务器目录。内置 10 张图片用于示例，均按明确的上下方向线索筛选，可换成自己的题库；来源与筛选标准见 [题图库说明](../assets/puzzles/README.md)。
 
 `wrangler.jsonc.vars` 支持主 README 对应的 `CAPTCHA_*` 字符串配置，包括模式、PoW 难度、TTL、角度容差和限流。`CAPTCHA_SECRET` 使用 secret 设置；修改配置后重新部署。Workers 版没有管理后台。
 

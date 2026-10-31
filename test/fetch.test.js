@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFetchHandler, readRequestJson } from '../src/fetch.js';
-import { fixture, nonceFor } from './helpers.js';
+import { fixture, nonceFor, challengeTrajectory } from './helpers.js';
 
 const secret = 'worker-secret-for-backend-only-1234567';
 const context = { ip: '192.0.2.4', action: 'login' };
@@ -11,7 +11,7 @@ test('Web Request/Response 适配器执行严格验证和受保护的核验', as
   const req = (path, body, headers = {}) => new Request('https://captcha.example/captcha/v1' + path, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
   const pow = await (await handle(req('/pow?action=login'))).json();
   const { challenge } = await (await handle(req('/verify', { action: 'login', pow: { prefix: pow.prefix, nonce: nonceFor(pow) }, ip: '1.1.1.1' }))).json();
-  const result = await (await handle(req('/challenge', { action: 'login', id: challenge.id, angle: -f.answer(challenge.id) }))).json();
+  const result = await (await handle(req('/challenge', { action: 'login', id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory }))).json();
   const data = { token: result.token, ...context };
   assert.equal((await handle(req('/siteverify', data))).status, 401);
   assert.equal((await handle(req('/siteverify', data, { Authorization: `Bearer ${secret}`, Origin: 'https://app.example' }))).status, 403);

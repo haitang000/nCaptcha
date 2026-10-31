@@ -1,4 +1,4 @@
-import { createTracking } from './tracking.js';
+import { createTracking, createChallengeTracking } from './tracking.js';
 import { solvePow, delay, abortError } from './pow.js';
 import logo from './logo.svg';
 
@@ -87,11 +87,12 @@ export function render(container, options = {}) {
       root.append(dlg);
       const viewport = dlg.querySelector('.stage-viewport'), stage = dlg.querySelector('.stage'), img = dlg.querySelector('img'), range = dlg.querySelector('.range'), eyebrow = dlg.querySelector('.puzzle-eyebrow'), errEl = dlg.querySelector('.error-text');
       img.src = challenge.image;
+      const challengeTracking = createChallengeTracking(dlg);
       let deg = 0, drag = null, settled = false, submitting = false, keyboardAdjusting = false, rangeCancelled = false;
       const events = new AbortController();
       const listen = (el, type, fn) => el.addEventListener(type, fn, { signal: events.signal });
       const finish = (value, error) => {
-        if (settled) return; settled = true; events.abort(); signal.removeEventListener('abort', aborted);
+        if (settled) return; settled = true; events.abort(); challengeTracking.cleanup(); signal.removeEventListener('abort', aborted);
         clearTimeout(challengeTimer);
         if (challengeId === challenge.id) challengeId = null;
         if (!value) releaseChallenge(challenge.id);
@@ -157,6 +158,7 @@ export function render(container, options = {}) {
           outgoing.remove();
         }
         if (settled) return;
+        challengeTracking.reset();
         submitting = false; keyboardAdjusting = false; rangeCancelled = false;
         range.disabled = false; stage.removeAttribute('aria-disabled'); delete stage.dataset.phase;
         dlg.removeAttribute('aria-busy'); eyebrow.textContent = '请进行安全验证';
@@ -164,13 +166,17 @@ export function render(container, options = {}) {
       }
       async function submit() {
         if (submitting || settled || signal.aborted) return;
+        // 禁用滑块前把焦点留在弹窗内，加载期间仍可用 Escape 取消。
+        if (root.activeElement === range) dlg.querySelector('h3').focus({ preventScroll: true });
         submitting = true; range.disabled = true; errEl.textContent = '';
         const checkingSince = performance.now(), feedbackMs = motion() ? 560 : 300, exitMs = motion() ? 160 : 0;
         dlg.classList.remove('has-error'); dlg.setAttribute('aria-busy', 'true'); stage.setAttribute('aria-disabled', 'true'); stage.dataset.phase = 'loading'; eyebrow.textContent = '正在验证…';
         let result = null, failure = null;
+        const behavior = challengeTracking.snapshot();
+        const payload = { id: challenge.id, angle: Math.round(deg) % 360, ...behavior, hints: { ...tracking.getHints(), pointer: behavior.pointer } };
         try {
           for (let attempt = 0; attempt < 2; attempt++) {
-            try { result = prepareToken(await request('/challenge', { id: challenge.id, angle: Math.round(deg) % 360, pointer: tracking.getHints().pointer }, events.signal)); break; }
+            try { result = prepareToken(await request('/challenge', payload, events.signal)); break; }
             catch (error) {
               // 松手比最低求解间隔早时等待剩余时间；不要求用户再次拖动。
               if (attempt === 0 && error.code === 'TOO_FAST' && Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) { await delay(error.retryAfterMs + 25, events.signal); continue; }
@@ -196,7 +202,7 @@ export function render(container, options = {}) {
           if (settled) return;
           await delay(drawing.length ? 180 : motion() ? feedbackMs : 300, events.signal);
           if (settled) return;
-          if (failure && ['ANGLE_INCORRECT', 'CHALLENGE_EXHAUSTED', 'CHALLENGE_EXPIRED'].includes(failure.code)) await nextRound();
+          if (failure && ['ANGLE_INCORRECT', 'BEHAVIOR_REJECTED', 'CHALLENGE_EXHAUSTED', 'CHALLENGE_EXPIRED'].includes(failure.code)) await nextRound();
           else finish(result, failure);
         } catch (error) {
           if (!settled) finish(null, error);
@@ -220,6 +226,7 @@ export function render(container, options = {}) {
       listen(stage, 'pointerup', e => { if (!drag || e.pointerId !== drag.pointer) return; const moved = drag.moved; drag = null; stage.classList.remove('dragging'); if (moved) void submit(); });
       for (const event of ['pointercancel', 'lostpointercapture']) listen(stage, event, () => { drag = null; stage.classList.remove('dragging'); });
       listen(dlg.querySelector('[data-cancel]'), 'click', () => finish(null));
+      listen(dlg, 'keydown', e => { if (e.key === 'Escape') { e.preventDefault(); finish(null); } });
       listen(dlg, 'cancel', e => { e.preventDefault(); finish(null); });
       listen(dlg, 'close', () => finish(null));
       listen(dlg, 'click', e => { if (e.target === dlg) { const r = dlg.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) finish(null); } });

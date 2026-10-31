@@ -6,13 +6,15 @@ import { sha256Hex } from '../src/client/hash.js';
 import { sampleTrajectory } from '../src/client/tracking.js';
 import crypto from 'node:crypto';
 
-test('四张题图完整；解码编码及随机加工仍保持尺寸', () => {
+test('十张题图完整；解码编码及随机加工仍保持尺寸', () => {
   const puzzles = loadPuzzles(new URL('../assets/puzzles/', import.meta.url));
-  assert.equal(puzzles.length, 4);
-  const image = obscurePuzzle(puzzles[0]);
-  assert.equal(image.w, 256); assert.equal(image.h, 256);
-  const bytes = encodePng(image);
-  assert.deepEqual(decodePng(bytes).rgba, image.rgba);
+  assert.equal(puzzles.length, 10);
+  for (const puzzle of puzzles) {
+    const image = obscurePuzzle(puzzle);
+    assert.equal(image.w, 256); assert.equal(image.h, 256);
+    const bytes = encodePng(image);
+    assert.deepEqual(decodePng(bytes).rgba, image.rgba);
+  }
 });
 
 test('随机加工保留边缘方向线索，亮度扰动不产生彩色噪点或大幅偏色', t => {

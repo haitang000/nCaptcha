@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createCaptcha } from './index.js';
 import { createHttpHandler, sendJson } from './http.js';
+import { serveLanding } from './landing.js';
+import { CaptchaError } from './error.js';
 
 export function configFromEnv(env) {
   const numeric = {
@@ -29,8 +31,20 @@ export function startService(config) {
   let handler;
   try { handler = createHttpHandler(captcha, config.http); } catch (err) { void captcha.close(); throw err; }
   const server = http.createServer(async (req, res) => {
-    if (req.url === '/health' && req.method === 'GET') { sendJson(res, 200, { ok: true }); return; }
-    if (!await handler(req, res)) sendJson(res, 404, { error: '未找到', code: 'NOT_FOUND' });
+    try {
+      if (req.url === '/health' && req.method === 'GET') { sendJson(res, 200, { ok: true }); return; }
+      if (await handler(req, res) || await serveLanding(req, res, {
+        captcha, allowedOrigins: config.http?.allowedOrigins ?? [], trustedProxies: config.http?.trustedProxies ?? [],
+      })) return;
+      sendJson(res, 404, { error: '未找到', code: 'NOT_FOUND' });
+    } catch (err) {
+      if (res.destroyed || res.writableEnded) return;
+      if (!(err instanceof CaptchaError)) console.error(err);
+      sendJson(res, err instanceof CaptchaError ? err.status : 500, {
+        error: err instanceof CaptchaError ? err.message : '验证服务暂时不可用',
+        code: err instanceof CaptchaError ? err.code : 'INTERNAL_ERROR',
+      });
+    }
   });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;

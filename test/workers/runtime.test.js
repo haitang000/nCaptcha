@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { fileURLToPath } from 'node:url';
-import { nonceFor } from '../helpers.js';
+import { nonceFor, challengeTrajectory } from '../helpers.js';
 import { chromium } from '@playwright/test';
 
 const secret = 'workerd-private-secret-at-least-32-characters';
@@ -34,7 +34,7 @@ async function solve(ip, action = 'login') {
   const challenge = await issue(ip, action);
   const db = await dbFor(ip);
   const row = (await db.exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
-  const response = await post('/challenge', { action, id: challenge.id, angle: -JSON.parse(row.value).answer }, ip);
+  const response = await post('/challenge', { action, id: challenge.id, angle: -JSON.parse(row.value).answer, trajectory: challengeTrajectory }, ip);
   assert.equal(response.status, 200, await response.clone().text());
   return response.json();
 }
@@ -136,7 +136,8 @@ test('浏览器从真实 Workers 资源加载 UI，完成图片验证并由业�
     const { challenge } = await response.json();
     const row = (await (await dbFor('127.0.0.1')).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
     const angle = (360 - JSON.parse(row.value).answer) % 360;
-    await page.locator('input[type=range]').evaluate((element, value) => { element.value = String(value); element.dispatchEvent(new Event('input')); element.dispatchEvent(new Event('change')); }, angle);
+    await page.locator('input[type=range]').evaluate((element, value) => { element.value = String(value); element.dispatchEvent(new Event('input')); }, angle);
+    await page.locator('input[type=range]').press('Enter');
     await page.waitForFunction(() => !!window.token);
     const token = await page.evaluate(() => widget.getToken());
     assert.equal((await (await post('/siteverify', { token, ip: '127.0.0.1', action: 'browser' }, '203.0.113.99', { Authorization: `Bearer ${secret}` })).json()).success, true);

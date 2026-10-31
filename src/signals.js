@@ -87,6 +87,25 @@ export function analyzeTrajectory(points, isTouch) {
   return score;
 }
 
+// 图片滑块可以自然地沿直线或短距离移动，不能套用出图前的弯曲度/60px 门槛。
+export function passesChallengeTrajectory(points, isTouch) {
+  if (!Array.isArray(points) || points.length < 3) return false;
+  if (points.at(-1).t - points[0].t < 80) return false;
+  const segments = points.slice(1).map((point, i) => ({
+    distance: Math.hypot(point.x - points[i].x, point.y - points[i].y),
+    dt: point.t - points[i].t,
+  }));
+  if (segments.reduce((sum, segment) => sum + segment.distance, 0) < 1) return false;
+  // 同时具有完全固定的采样间隔和速度才拒绝，允许硬件的固定刷新节拍。
+  const moving = segments.filter(segment => segment.distance > 0);
+  if (!isTouch && moving.length >= 5) {
+    const intervals = moving.map(segment => segment.dt), speeds = moving.map(segment => segment.distance / segment.dt);
+    const spread = values => (Math.max(...values) - Math.min(...values)) / (values.reduce((sum, value) => sum + value, 0) / values.length);
+    if (spread(intervals) < .01 && spread(speeds) < .01) return false;
+  }
+  return true;
+}
+
 /**
  * 表单填写行为分析：打字节拍、焦点切换规律。
  *

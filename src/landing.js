@@ -9,13 +9,13 @@ const assets = new Map([
 ]);
 
 /** The public demo consumes only landing-demo tokens, never business tokens. */
-export async function serveLanding(req, res, { captcha, allowedOrigins = [] } = {}) {
+export async function serveLanding(req, res, { captcha, allowedOrigins = [], trustedProxies = [] } = {}) {
   const path = new URL(req.url, 'http://localhost').pathname;
   if (path === '/demo/verify' && captcha) {
     if (req.method !== 'POST') { sendJson(res, 405, { error: '请使用 POST', code: 'METHOD_NOT_ALLOWED' }); return true; }
     if (!allowedOrigins.includes(req.headers.origin)) { sendJson(res, 403, { error: '该来源未获准访问', code: 'ORIGIN_DENIED' }); return true; }
     const { token } = await readJson(req);
-    const success = await captcha.consumeToken({ token, ip: getClientIp(req), action: 'landing-demo' });
+    const success = await captcha.consumeToken({ token, ip: getClientIp(req, trustedProxies), action: 'landing-demo' });
     sendJson(res, success ? 200 : 400, success ? { success: true } : { success: false, error: '令牌无效或已过期，请重新验证' });
     return true;
   }

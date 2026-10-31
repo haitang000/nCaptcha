@@ -1,11 +1,45 @@
 // src/client/tracking.js
-function sampleTrajectory(points, limit = 100) {
-  if (points.length < 5) return null;
+function sampleTrajectory(points, limit = 100, minPoints = 5) {
+  if (points.length < minPoints) return null;
   const n = Math.min(limit, points.length), start = points[0].t;
   return Array.from({ length: n }, (_, i) => {
     const p = points[Math.round(i * (points.length - 1) / (n - 1))];
     return { x: p.x, y: p.y, t: p.t - start };
   });
+}
+function pushPoint(points, event) {
+  const t = performance.now();
+  const p = event.touches?.[0] ?? event.changedTouches?.[0] ?? event;
+  if (!p || !Number.isFinite(p.clientX) || !Number.isFinite(p.clientY) || points.length && t <= points.at(-1).t) return;
+  points.push({ x: Math.round(p.clientX), y: Math.round(p.clientY), t });
+  if (points.length > 500) points.splice(0, 250);
+}
+function createChallengeTracking(element) {
+  const listeners = new AbortController(), points = [];
+  const initialPointer = element.ownerDocument.defaultView.matchMedia("(pointer: coarse)").matches ? "touch" : "mouse";
+  let pointer = initialPointer;
+  const record = (event) => {
+    pointer = event.pointerType || initialPointer;
+    pushPoint(points, event);
+  };
+  const listen = (type, fn) => element.addEventListener(type, fn, { capture: true, passive: true, signal: listeners.signal });
+  for (const type of ["pointerdown", "pointermove", "pointerup"]) listen(type, record);
+  listen("keydown", (event) => {
+    if (event.target.matches?.('input[type="range"], [role="slider"]') && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Enter"].includes(event.key)) pointer = "keyboard";
+  });
+  return {
+    snapshot() {
+      return { pointer, trajectory: pointer === "keyboard" ? null : sampleTrajectory(points, 100, 3) };
+    },
+    reset() {
+      points.length = 0;
+      pointer = initialPointer;
+    },
+    cleanup() {
+      listeners.abort();
+      points.length = 0;
+    }
+  };
 }
 function createTracking(anchor, form) {
   const listeners = new AbortController();
@@ -14,13 +48,7 @@ function createTracking(anchor, form) {
   const coarse = win.matchMedia("(pointer: coarse)").matches;
   const trajectory = [], gestures = [];
   let current = null, pointer = coarse ? "touch" : "mouse";
-  function push(points, event) {
-    const t = performance.now();
-    const p = event.touches?.[0] ?? event.changedTouches?.[0] ?? event;
-    if (!p || !Number.isFinite(p.clientX) || points.length && t <= points.at(-1).t) return;
-    points.push({ x: Math.round(p.clientX), y: Math.round(p.clientY), t });
-    if (points.length > 500) points.splice(0, 250);
-  }
+  const push = pushPoint;
   function start(e) {
     pointer = e.pointerType || "touch";
     if (pointer === "touch" || pointer === "pen") {
@@ -497,6 +525,7 @@ function render(container, options = {}) {
       root.append(dlg);
       const viewport = dlg.querySelector(".stage-viewport"), stage = dlg.querySelector(".stage"), img = dlg.querySelector("img"), range = dlg.querySelector(".range"), eyebrow = dlg.querySelector(".puzzle-eyebrow"), errEl = dlg.querySelector(".error-text");
       img.src = challenge.image;
+      const challengeTracking = createChallengeTracking(dlg);
       let deg = 0, drag = null, settled = false, submitting = false, keyboardAdjusting = false, rangeCancelled = false;
       const events = new AbortController();
       const listen = (el, type, fn) => el.addEventListener(type, fn, { signal: events.signal });
@@ -504,6 +533,7 @@ function render(container, options = {}) {
         if (settled) return;
         settled = true;
         events.abort();
+        challengeTracking.cleanup();
         signal.removeEventListener("abort", aborted);
         clearTimeout(challengeTimer);
         if (challengeId === challenge.id) challengeId = null;
@@ -594,6 +624,7 @@ function render(container, options = {}) {
           outgoing.remove();
         }
         if (settled) return;
+        challengeTracking.reset();
         submitting = false;
         keyboardAdjusting = false;
         rangeCancelled = false;
@@ -606,6 +637,7 @@ function render(container, options = {}) {
       }
       async function submit() {
         if (submitting || settled || signal.aborted) return;
+        if (root.activeElement === range) dlg.querySelector("h3").focus({ preventScroll: true });
         submitting = true;
         range.disabled = true;
         errEl.textContent = "";
@@ -616,10 +648,12 @@ function render(container, options = {}) {
         stage.dataset.phase = "loading";
         eyebrow.textContent = "\u6B63\u5728\u9A8C\u8BC1\u2026";
         let result = null, failure = null;
+        const behavior = challengeTracking.snapshot();
+        const payload = { id: challenge.id, angle: Math.round(deg) % 360, ...behavior, hints: { ...tracking.getHints(), pointer: behavior.pointer } };
         try {
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
-              result = prepareToken(await request("/challenge", { id: challenge.id, angle: Math.round(deg) % 360, pointer: tracking.getHints().pointer }, events.signal));
+              result = prepareToken(await request("/challenge", payload, events.signal));
               break;
             } catch (error) {
               if (attempt === 0 && error.code === "TOO_FAST" && Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) {
@@ -652,7 +686,7 @@ function render(container, options = {}) {
           if (settled) return;
           await delay(drawing.length ? 180 : motion() ? feedbackMs : 300, events.signal);
           if (settled) return;
-          if (failure && ["ANGLE_INCORRECT", "CHALLENGE_EXHAUSTED", "CHALLENGE_EXPIRED"].includes(failure.code)) await nextRound();
+          if (failure && ["ANGLE_INCORRECT", "BEHAVIOR_REJECTED", "CHALLENGE_EXHAUSTED", "CHALLENGE_EXPIRED"].includes(failure.code)) await nextRound();
           else finish(result, failure);
         } catch (error) {
           if (!settled) finish(null, error);
@@ -715,6 +749,12 @@ function render(container, options = {}) {
         stage.classList.remove("dragging");
       });
       listen(dlg.querySelector("[data-cancel]"), "click", () => finish(null));
+      listen(dlg, "keydown", (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finish(null);
+        }
+      });
       listen(dlg, "cancel", (e) => {
         e.preventDefault();
         finish(null);

@@ -163,6 +163,8 @@ PoW 默认在挂载时预热；Worker 和主线程回退都复用 SHA-256 单块
 
 图片回正弹窗采用圆形预览与胶囊滑块，松开滑块自动验证。鼠标和触屏均可拖动；键盘可用方向键微调后按 Enter 确认，Escape 或点击弹窗外可取消。图片拖动操作仍保留。`--captcha-track` 可自定义滑轨背景色。
 
+图片验证期间会独立采集本轮弹窗内的鼠标、触屏或笔轨迹，提交答案时由服务端同时检查轨迹与角度。缺失轨迹、静止点、过短操作和鼠标匀速等间隔轨迹会被拒绝；支持正常的直线滑动及短距离微调。轨迹最多提交 100 个点，换题时清空，取消、重置或销毁时移除监听。键盘操作明确提交 `pointer: 'keyboard'`，不要求鼠标轨迹。
+
 ## 独立服务：其他语言也能接入
 
 ```powershell
@@ -194,11 +196,13 @@ Content-Type: application/json
 | --- | --- | --- |
 | GET `/pow?action=register` | 用途查询参数 | `{ prefix, bits, expiresInMs }` |
 | POST `/verify` | `{ action, pow:{prefix,nonce}, trajectory?, formBehavior?, hints? }` | 令牌结果或 `{ challenge:{id,image,expiresInMs} }` |
-| POST `/challenge` | `{ action, id, angle, pointer? }` | `{ token, expiresInMs, usableAfterMs }` |
+| POST `/challenge` | `{ action, id, angle, pointer?, trajectory?, hints? }` | `{ token, expiresInMs, usableAfterMs }` |
 | POST `/cancel` | `{ action, id }` | `{ cancelled:boolean }` |
 | POST `/siteverify` | 服务端密钥和 `{ token, ip, action }` | `{ success:boolean }` |
 
 浏览器接口的 IP 只由连接地址/可信代理解析，忽略请求体中的 `ip`。角度为客户端 CSS 顺时针旋转量，整数或有限小数均可；图片已顺时针旋转，所以正确提交值对应服务端角度的负值。失败后 `ANGLE_INCORRECT` 可继续微调；`CHALLENGE_EXHAUSTED/CHALLENGE_EXPIRED` 必须重新验证。
+
+`/challenge` 的 `trajectory` 为本轮图片验证的 `{x,y,t}[]`，`t` 为相对首个点的毫秒数且严格递增，至少需要 3 个点并覆盖 80ms。鼠标、触屏、笔操作必须提供轨迹；自定义客户端需同步适配，旧客户端仅提交角度会返回 `BEHAVIOR_REJECTED`。缺失或低质量轨迹同样消耗本题尝试次数并计入失败声誉；浏览器组件收到 `BEHAVIOR_REJECTED` 会在当前弹窗中自动换题。键盘模式和轨迹均为客户端自报信息，仍属于启发式判断。
 
 `CAPTCHA_ALLOWED_ORIGINS` 配置精确来源白名单（含协议和非默认端口，无末尾斜杠），多个来源用逗号分隔。浏览器同源 POST 也可能带 Origin，需将业务自身 origin 列入。未携带 Origin 的服务端请求仍可访问公开挑战接口；来源白名单不是身份认证。
 
@@ -218,7 +222,7 @@ Content-Type: application/json
 | `tokenTtlMs` / `challengeTtlMs` | 300000 / 300000 | 令牌/图片挑战有效期 |
 | `maxChallengesPerIp` / `challengeTries` | 3 / 3 | 并发未解题目上限及每题尝试次数 |
 | `rateLimit` / `rateWindowMs` | 60 / 600000 | 所有公开验证码操作共用每 IP 滑动窗口 |
-| `imagesDir` | 内置四张题图 | 自备 PNG 目录；无可用题图时启动报错 |
+| `imagesDir` | 内置 10 张题图 | 自备 PNG 目录；无可用题图时启动报错 |
 | `store` / `namespace` | 自有内存 / 随机实例命名空间 | 外部状态接口与键前缀 |
 | `now` | `Date.now` | 可注入时钟，便于模拟过期 |
 
@@ -226,7 +230,7 @@ Content-Type: application/json
 
 扩展存储需实现异步 `get/set/delete/update`。**`update(key, updater)` 必须原子执行同一键的读取、同步回调和状态写回**，过期记录视为不存在，参数和返回值需与内部状态隔离。回调返回 `{ value, ttlMs, result }`；省略 `value` 表示删除，`result` 作为方法结果。不要用非原子的远程 `get` 再 `set` 实现它。Node 默认提供单进程内存实现，Workers 另提供 SQLite Durable Objects 实现，未提供 Redis 适配器。未来使用共享存储时，各副本需显式使用相同 `namespace`。
 
-行为信号可由客户端伪造，评分只是启发式判断。图片扰动也不保证无法识别；内置题图主要用于示例，部署时可换成方向明确的私有题库。轨迹只保留有限点数，表单仅采集时间统计和字段顺序，不采集输入内容或画布指纹；所有状态按有效期清理。
+行为信号可由客户端伪造，评分只是启发式判断。图片扰动也不保证无法识别；内置题图主要用于示例，部署时可换成方向明确的私有题库。目前保留 2 张方向明确的原图，新增 8 张生成题图，移除了云海和大面积天空的麦田小路图；题图筛选标准、来源与生成提示词见 [题图库说明](assets/puzzles/README.md)。轨迹只保留有限点数，表单仅采集时间统计和字段顺序，不采集输入内容或画布指纹；所有状态按有效期清理。
 
 ## 验证与打包
 

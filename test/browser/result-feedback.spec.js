@@ -22,8 +22,9 @@ async function submit(page, angleOffset = 0) {
 async function answer(page, challenge, angleOffset = 0) {
   const state = await (await page.request.get('/state')).json();
   await page.locator('.range').evaluate((el, value) => {
-    el.value = String(value); el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change'));
+    el.value = String(value); el.dispatchEvent(new Event('input'));
   }, (360 - state[challenge.id].answer + angleOffset) % 360);
+  await page.locator('.range').press('Enter');
 }
 test.beforeEach(async ({ page }) => {
   page.__errors = []; page.on('pageerror', error => page.__errors.push(error.message));
@@ -159,6 +160,7 @@ test('加载与结果展示中取消、reset、destroy 会终止等待且不会�
   for (const [step, operation] of [['loading', 'cancel'], ['success', 'reset'], ['success', 'destroy']]) {
     await mount(page); await submit(page);
     await phase(page, step);
+    expect(await page.locator('dialog h3').evaluate(el => el.getRootNode().activeElement === el)).toBe(true);
     if (operation === 'cancel') await page.keyboard.press('Escape');
     else await page.evaluate(operation => widget[operation](), operation);
     await expect(page.locator('dialog')).toHaveCount(0);

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { isIP } from 'node:net';
 import { obscurePuzzle, rotateToPng } from './image-codec.js';
-import { analyzeTrajectory, analyzeFormBehavior, validSignals } from './signals.js';
+import { analyzeTrajectory, analyzeFormBehavior, validSignals, passesChallengeTrajectory } from './signals.js';
 import { createMemoryStore } from './store.js';
 import { CaptchaError, invalid } from './error.js';
 export { createMemoryStore, CaptchaError };
@@ -129,19 +129,26 @@ export function createCaptchaCore(options = {}, loadPictures) {
     },
     async solveChallenge(input) {
       const ctx = context(input); await throttle(ctx.ip);
-      const { id, angle, pointer = 'mouse' } = input;
+      const { id, angle, pointer = 'mouse', trajectory = null, hints = null } = input;
       if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id) || !Number.isFinite(angle) || Math.abs(angle) > 360000 || !['mouse', 'touch', 'pen', 'keyboard'].includes(pointer)) throw invalid();
+      if (!validSignals(trajectory, null, hints)) { await reputation(ctx.ip, true); throw invalid(); }
       const result = await store.update(key('challenge', id), record => {
         if (!record) return { result: { code: 'CHALLENGE_EXPIRED' } };
         if (!same(record, ctx)) return { result: { code: 'BINDING_MISMATCH', releaseIp: record.ip } };
         if (now() - record.createdAt < config.minSolveMs) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'TOO_FAST', retryAfterMs: config.minSolveMs - (now() - record.createdAt) } };
         const tolerance = ['touch', 'pen'].includes(pointer) ? Math.min(config.tolerance + 4, 15) : config.tolerance;
-        if (Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { success: true, releaseIp: record.ip } };
+        const behaviorPasses = pointer === 'keyboard' || passesChallengeTrajectory(trajectory, pointer === 'touch' || pointer === 'pen');
+        if (behaviorPasses && Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { success: true, releaseIp: record.ip } };
         record.tries--;
-        return { value: record.tries ? record : undefined, ttlMs: record.expiresAt - now(), result: { code: record.tries ? 'ANGLE_INCORRECT' : 'CHALLENGE_EXHAUSTED', triesRemaining: record.tries, releaseIp: record.tries ? undefined : record.ip } };
+        const code = !record.tries ? 'CHALLENGE_EXHAUSTED' : behaviorPasses ? 'ANGLE_INCORRECT' : 'BEHAVIOR_REJECTED';
+        return { value: record.tries ? record : undefined, ttlMs: record.expiresAt - now(), result: { code, triesRemaining: record.tries, releaseIp: record.tries ? undefined : record.ip } };
       });
       if (result.releaseIp) await release(result.releaseIp, id);
-      if (!result.success) { await reputation(ctx.ip, true); throw new CaptchaError(result.code, result.code === 'ANGLE_INCORRECT' ? '方向还未回正，请微调后重试' : result.code === 'TOO_FAST' ? '请稍等再提交' : '挑战无效或已过期，请重新验证', 400, { triesRemaining: result.triesRemaining, retryAfterMs: result.retryAfterMs }); }
+      if (!result.success) {
+        await reputation(ctx.ip, true);
+        const message = { ANGLE_INCORRECT: '方向还未回正，请微调后重试', BEHAVIOR_REJECTED: '操作轨迹异常，请重新拖动完成验证', TOO_FAST: '请稍等再提交' }[result.code] ?? '挑战无效或已过期，请重新验证';
+        throw new CaptchaError(result.code, message, 400, { triesRemaining: result.triesRemaining, retryAfterMs: result.retryAfterMs });
+      }
       return mint(ctx);
     },
     async cancelChallenge(input) {

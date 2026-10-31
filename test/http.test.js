@@ -4,7 +4,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { createHttpHandler, createExpressMiddleware, getClientIp } from '../src/http.js';
 import { configFromEnv } from '../src/server.js';
-import { fixture, nonceFor } from './helpers.js';
+import { fixture, nonceFor, challengeTrajectory } from './helpers.js';
 const secret = 'test-secret-for-backend-only-123456789';
 async function serverFor(t, options = {}, httpOptions = {}) {
   const f = fixture(options);
@@ -21,7 +21,7 @@ test('HTTP 完整严格验证 → 等待 → 后端带密钥核验 → 重放失
   const pow = await (await fetch(f.base + '/captcha/v1/pow?action=login')).json();
   const { challenge } = await (await f.post('/verify', { action: 'login', pow: { prefix: pow.prefix, nonce: nonceFor(pow) } })).json();
   assert.ok(challenge.image.startsWith('data:image/png;base64,')); assert.equal(challenge.answer, undefined);
-  const result = await (await f.post('/challenge', { action: 'login', id: challenge.id, angle: -f.answer(challenge.id) })).json();
+  const result = await (await f.post('/challenge', { action: 'login', id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory })).json();
   assert.equal((await f.post('/siteverify', { token: result.token, ip: '127.0.0.1', action: 'login' })).status, 401);
   const headers = { Authorization: `Bearer ${secret}` };
   const verifyBody = { token: result.token, ip: '127.0.0.1', action: 'login' };

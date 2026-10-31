@@ -1,10 +1,37 @@
-export function sampleTrajectory(points, limit = 100) {
-  if (points.length < 5) return null;
+export function sampleTrajectory(points, limit = 100, minPoints = 5) {
+  if (points.length < minPoints) return null;
   const n = Math.min(limit, points.length), start = points[0].t;
   return Array.from({ length: n }, (_, i) => {
     const p = points[Math.round(i * (points.length - 1) / (n - 1))];
     return { x: p.x, y: p.y, t: p.t - start };
   });
+}
+
+function pushPoint(points, event) {
+  const t = performance.now();
+  const p = event.touches?.[0] ?? event.changedTouches?.[0] ?? event;
+  if (!p || !Number.isFinite(p.clientX) || !Number.isFinite(p.clientY) || (points.length && t <= points.at(-1).t)) return;
+  points.push({ x: Math.round(p.clientX), y: Math.round(p.clientY), t });
+  if (points.length > 500) points.splice(0, 250);
+}
+
+// 每轮图片挑战单独采集；捕获阶段记录松手，确保 change/submit 前已有完整轨迹。
+export function createChallengeTracking(element) {
+  const listeners = new AbortController(), points = [];
+  const initialPointer = element.ownerDocument.defaultView.matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
+  let pointer = initialPointer;
+  const record = event => { pointer = event.pointerType || initialPointer; pushPoint(points, event); };
+  const listen = (type, fn) => element.addEventListener(type, fn, { capture: true, passive: true, signal: listeners.signal });
+  for (const type of ['pointerdown', 'pointermove', 'pointerup']) listen(type, record);
+  listen('keydown', event => {
+    if (event.target.matches?.('input[type="range"], [role="slider"]') &&
+      ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Enter'].includes(event.key)) pointer = 'keyboard';
+  });
+  return {
+    snapshot() { return { pointer, trajectory: pointer === 'keyboard' ? null : sampleTrajectory(points, 100, 3) }; },
+    reset() { points.length = 0; pointer = initialPointer; },
+    cleanup() { listeners.abort(); points.length = 0; },
+  };
 }
 
 export function createTracking(anchor, form) {
@@ -14,13 +41,7 @@ export function createTracking(anchor, form) {
   const coarse = win.matchMedia('(pointer: coarse)').matches;
   const trajectory = [], gestures = [];
   let current = null, pointer = coarse ? 'touch' : 'mouse';
-  function push(points, event) {
-    const t = performance.now();
-    const p = event.touches?.[0] ?? event.changedTouches?.[0] ?? event;
-    if (!p || !Number.isFinite(p.clientX) || (points.length && t <= points.at(-1).t)) return;
-    points.push({ x: Math.round(p.clientX), y: Math.round(p.clientY), t });
-    if (points.length > 500) points.splice(0, 250);
-  }
+  const push = pushPoint;
   function start(e) { pointer = e.pointerType || 'touch'; if (pointer === 'touch' || pointer === 'pen') { current = []; push(current, e); } else push(trajectory, e); }
   function move(e) {
     if (e.pointerType) pointer = e.pointerType;

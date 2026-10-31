@@ -19,8 +19,9 @@ test('Landing 真实挑战、服务端消费、重放拒绝与重新体验', asy
   const state = await (await page.request.get('/state')).json();
   const angle = (360 - state[challenge.id].answer) % 360;
   await page.locator('#demo-captcha input[type=range]').evaluate((el, value) => {
-    el.value = String(value); el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change'));
+    el.value = String(value); el.dispatchEvent(new Event('input'));
   }, angle);
+  await page.locator('#demo-captcha input[type=range]').press('Enter');
   await expect(page.locator('#demo-status')).toHaveAttribute('data-state', 'verified');
   await expect(page.locator('#token-preview')).toHaveText(/^[a-f0-9]{8}…[a-f0-9]{8}$/);
   const request = page.waitForRequest(r => r.url().endsWith('/demo/verify'));

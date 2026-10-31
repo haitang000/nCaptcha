@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createCaptcha, createMemoryStore } from '../src/index.js';
-import { fixture, ctx, nonceFor, verify, solved } from './helpers.js';
+import { fixture, ctx, nonceFor, verify, solved, challengeTrajectory } from './helpers.js';
 const code = expected => error => error.code === expected;
 
 test('默认参数、无题图及非法配置在启动时失败', async () => {
@@ -52,7 +52,7 @@ test('图片答案方向、跨 0° 容差、触屏容差和错误角度', async 
     const f = fixture();
     try {
       const { challenge } = await verify(f.captcha);
-      const request = f.captcha.solveChallenge({ ...ctx, id: challenge.id, angle: 360 - f.answer(challenge.id) + offset, pointer });
+      const request = f.captcha.solveChallenge({ ...ctx, id: challenge.id, angle: 360 - f.answer(challenge.id) + offset, pointer, trajectory: challengeTrajectory });
       if (pass) assert.ok((await request).token); else await assert.rejects(request, code('ANGLE_INCORRECT'));
     } finally { await f.close(); }
   });
@@ -67,8 +67,8 @@ test('最低求解时间保留挑战；三次错误耗尽；取消只释放自�
     assert.equal(await f.captcha.cancelChallenge({ ...ctx, id: a.id }), true);
     assert.ok((await verify(f.captcha)).challenge);
     f.advance(1000);
-    assert.ok((await f.captcha.solveChallenge({ ...ctx, id: b.id, angle: -f.answer(b.id) })).token);
-    for (let i = 0; i < 3; i++) await assert.rejects(f.captcha.solveChallenge({ ...ctx, id: c.id, angle: -f.answer(c.id) + 90 }), code(i === 2 ? 'CHALLENGE_EXHAUSTED' : 'ANGLE_INCORRECT'));
+    assert.ok((await f.captcha.solveChallenge({ ...ctx, id: b.id, angle: -f.answer(b.id), trajectory: challengeTrajectory })).token);
+    for (let i = 0; i < 3; i++) await assert.rejects(f.captcha.solveChallenge({ ...ctx, id: c.id, angle: -f.answer(c.id) + 90, trajectory: challengeTrajectory }), code(i === 2 ? 'CHALLENGE_EXHAUSTED' : 'ANGLE_INCORRECT'));
     await assert.rejects(f.captcha.solveChallenge({ ...ctx, id: c.id, angle: -f.answer(c.id) }), code('CHALLENGE_EXPIRED'));
   } finally { await f.close(); }
 });
@@ -77,7 +77,7 @@ test('挑战过期、跨用途/跨 IP、并发求解仅成功一次', async t =>
     const f = fixture();
     try {
       const { challenge } = await verify(f.captcha);
-      const input = { ...ctx, id: challenge.id, angle: -f.answer(challenge.id) };
+      const input = { ...ctx, id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory };
       if (kind === 'race') {
         const results = await Promise.allSettled(Array.from({ length: 10 }, () => f.captcha.solveChallenge(input)));
         assert.equal(results.filter(r => r.status === 'fulfilled').length, 1); return;

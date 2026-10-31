@@ -22,7 +22,8 @@ async function answer(page, challenge, host = '#one') {
   const angle = (360 - state[challenge.id].answer) % 360;
   const root = page.locator(host);
   await page.waitForTimeout(120);
-  await root.locator('input[type=range]').evaluate((el, value) => { el.value = String(value); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, angle);
+  await root.locator('input[type=range]').evaluate((el, value) => { el.value = String(value); el.dispatchEvent(new Event('input', { bubbles: true })); }, angle);
+  await root.locator('input[type=range]').press('Enter');
 }
 
 test('完整验证等待令牌可用后回调，服务端消费且拒绝重放', async ({ page }) => {
@@ -79,6 +80,7 @@ test('Worker 加载受限时回退，进行中销毁会取消任务且不会复�
   await expect(page.locator('dialog')).toHaveCount(0);
 });
 test('鼠标或触屏拖动可旋转图片，默认主题布局不溢出', async ({ page, isMobile }) => {
+  const submitted = page.waitForRequest(r => r.url().endsWith('/captcha/v1/challenge'));
   await page.route('**/captcha/v1/challenge', route => route.fulfill({ status: 400, json: { code: 'ANGLE_INCORRECT', error: '方向还未回正，请微调后重试' } }));
   await mount(page);
   await start(page);
@@ -95,6 +97,9 @@ test('鼠标或触屏拖动可旋转图片，默认主题布局不溢出', async
     await page.mouse.move(r.x + r.width - 15, r.y + r.height / 2, { steps: 8 }); await page.mouse.up();
   }
   expect(Number(await stage.getAttribute('aria-valuenow'))).toBeGreaterThan(60);
+  const body = (await submitted).postDataJSON();
+  expect(body.pointer).toBe(isMobile ? 'touch' : 'mouse');
+  expect(body.trajectory.length).toBeGreaterThanOrEqual(3);
   const rect = await page.locator('dialog').boundingBox(); expect(rect.x).toBeGreaterThanOrEqual(0); expect(rect.width).toBeLessThanOrEqual(page.viewportSize().width);
   await page.screenshot({ path: `test-results/puzzle-${test.info().project.name}.png` });
   await page.keyboard.press('Escape');
@@ -134,7 +139,8 @@ for (const path of ['/examples', '/module', 'http://127.0.0.1:18878/']) test(`�
   const state = await (await page.request.get('http://127.0.0.1:18877/state')).json();
   const angle = (360 - state[challenge.id].answer) % 360;
   await page.waitForTimeout(120);
-  await page.locator('#captcha input[type=range]').evaluate((el, value) => { el.value = String(value); el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); }, angle);
+  await page.locator('#captcha input[type=range]').evaluate((el, value) => { el.value = String(value); el.dispatchEvent(new Event('input')); }, angle);
+  await page.locator('#captcha input[type=range]').press('Enter');
   await expect(page.locator('#result')).toHaveText('业务提交成功：后端已核验并消费令牌');
 });
 test('参考图卡片比例、六点滑块和纯图片圆形预览', async ({ page, isMobile }) => {
