@@ -105,26 +105,21 @@ test('Workers 按规范化 IPv6 定位同一个 Durable Object，等价地址不
   assert.equal(responses.filter(response => response.status === 429).length, 1);
 });
 
-test('Workers Landing 资源与专用 Demo 核验：来源、用途绑定和一次性消费', async () => {
-  for (const path of ['/', '/landing/styles.css', '/landing/app.js', '/landing/favicon.svg']) {
-    const response = await get(path); assert.equal(response.status, 200, path);
+test('Workers 不再提供 Demo 页面与公开核验入口，业务令牌仍通过密钥接口消费', async () => {
+  for (const path of ['/', '/landing/styles.css', '/landing/app.js', '/landing/favicon.svg', '/examples', '/module', '/test/form']) {
+    const response = await get(path); assert.equal(response.status, 404, path);
   }
   const ip = '192.0.2.20';
-  const demo = (token, origin = 'https://captcha.example') => mf.dispatchFetch('https://captcha.example/demo/verify', {
-    method: 'POST', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ token }),
-  });
   const business = await solve(ip, 'register');
-  assert.equal((await demo(business.token)).status, 400);
+  for (const method of ['GET', 'HEAD', 'POST']) {
+    const response = await mf.dispatchFetch('https://captcha.example/demo/verify', {
+      method, headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', Origin: 'https://captcha.example' },
+      ...(method === 'POST' ? { body: JSON.stringify({ token: business.token }) } : {}),
+    });
+    assert.equal(response.status, 404, method);
+  }
   const businessCheck = await post('/siteverify', { token: business.token, ip, action: 'register' }, ip, { Authorization: `Bearer ${secret}` });
   assert.equal((await businessCheck.json()).success, true);
-  const result = await solve(ip, 'landing-demo');
-  assert.equal((await demo(result.token, 'https://evil.example')).status, 403);
-  assert.equal((await demo(result.token)).status, 200);
-  assert.equal((await demo(result.token)).status, 400);
-  const invalid = await mf.dispatchFetch('https://captcha.example/demo/verify', {
-    method: 'POST', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', Origin: 'https://captcha.example' }, body: '{',
-  });
-  assert.equal(invalid.status, 400);
 });
 test('浏览器从真实 Workers 资源加载 UI，完成图片验证并由业务后端消费', async () => {
   const browser = await chromium.launch();

@@ -159,7 +159,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
       if (typeof input.token !== 'string' || !/^[a-f0-9]{64}$/.test(input.token)) return false;
       return store.update(key('token', input.token), record => {
         if (!record) return { result: false };
-        // A wrong IP/action must not let a public demo invalidate business tokens.
+        // A mismatched IP/action must not invalidate a token bound to another context.
         if (!same(record, ctx)) return { value: record, ttlMs: record.expiresAt - now(), result: false };
         if (now() - record.issuedAt < config.minTokenAgeMs) return { value: record, ttlMs: record.expiresAt - now(), result: false };
         return { result: true };

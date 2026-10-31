@@ -1,10 +1,9 @@
-// 专用测试服务。答案接口只在本文件存在，不包含在 npm 包或示例服务中。
+// 专用测试服务。答案接口与测试页面均不包含在 npm 包中。
 import http from 'node:http';
 import { createCaptcha, createMemoryStore } from '../src/index.js';
 import { createHttpHandler, sendJson, readJson, getClientIp } from '../src/http.js';
-import { servePage } from '../examples/shared.js';
-import { serveLanding } from '../src/landing.js';
-import { startStandaloneDemo } from '../examples/standalone/server.js';
+import { serveFormPage } from './fixtures/form-page.js';
+import { startBusinessServer } from './fixtures/business-server.js';
 const records = new Map();
 const memory = createMemoryStore();
 const store = { ...memory, async set(key, value, ttl) { if (key.includes(':challenge:')) records.set(key.split(':').at(-1), value); return memory.set(key, value, ttl); } };
@@ -20,11 +19,10 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req); const success = await captcha.consumeToken({ ip: getClientIp(req), action: 'demo', token: body.token });
       sendJson(res, success ? 200 : 400, { success }); return;
     }
-    if (await serveLanding(req, res, { captcha, allowedOrigins: ['http://127.0.0.1:18877'] })) return;
-    if (await servePage(req, res, { pagePath: '/examples' })) return;
+    if (serveFormPage(req, res)) return;
     res.writeHead(404); res.end();
   } catch (err) { sendJson(res, 500, { error: err.message }); }
 });
 server.listen(18877, '127.0.0.1');
-const business = startStandaloneDemo({ port: 18878, secret, captchaUrl: 'http://127.0.0.1:18877' });
+const business = startBusinessServer({ port: 18878, secret, captchaUrl: 'http://127.0.0.1:18877' });
 process.once('SIGTERM', () => { server.close(); business.close(); void captcha.close(); void memory.close(); });

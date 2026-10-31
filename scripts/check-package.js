@@ -14,8 +14,9 @@ function run(cmd, args, cwd = root) {
 }
 const packed = JSON.parse(run(process.execPath, [npm, 'pack', '--json', '--ignore-scripts']));
 const info = Array.isArray(packed) ? packed[0] : Object.values(packed)[0];
-assert.ok(!info.files.some(file => file.path.startsWith('test/')));
-for (const name of ['src/index.js', 'src/index.d.ts', 'src/http.js', 'src/client/index.d.ts', 'dist/captcha.js', 'dist/captcha.esm.js', 'dist/captcha.css', 'dist/pow-worker.js', 'assets/puzzles/puzzle-1.png', 'examples/page.html', 'workers/index.js', '.workers/puzzles.js', 'wrangler.jsonc', 'docs/WORKERS.md']) assert.ok(info.files.some(file => file.path === name), name);
+assert.ok(!info.files.some(file => /^(?:test|landing|examples)\//.test(file.path) || file.path === 'src/landing.js'));
+assert.deepEqual(info.files.filter(file => file.path.startsWith('dist/')).map(file => file.path).sort(), ['dist/captcha.css', 'dist/captcha.esm.js', 'dist/captcha.js', 'dist/pow-worker.js']);
+for (const name of ['src/index.js', 'src/index.d.ts', 'src/http.js', 'src/client/index.d.ts', 'dist/captcha.js', 'dist/captcha.esm.js', 'dist/captcha.css', 'dist/pow-worker.js', 'assets/puzzles/puzzle-1.png', 'workers/index.js', '.workers/puzzles.js', 'wrangler.jsonc', 'docs/WORKERS.md']) assert.ok(info.files.some(file => file.path === name), name);
 assert.ok(!info.files.some(file => file.path === '.dev.vars' || file.path === '.env' || file.path.startsWith('.wrangler/') || file.path.startsWith('.workers/bundle/')));
 await fs.mkdir(path.join(root, '.package-check'), { recursive: true });
 const directory = await fs.mkdtemp(path.join(root, '.package-check/run-'));

@@ -131,7 +131,7 @@ test('计算中 reset 终止独立 Worker 并拒绝旧任务', async ({ page }) 
   expect(await page.evaluate(() => window.activeWorkers)).toBe(0);
   expect(await page.evaluate(() => widget.getToken())).toBe(null);
 });
-for (const path of ['/examples', '/module', 'http://127.0.0.1:18878/']) test(`可运行示例提交：${path}`, async ({ page }) => {
+for (const path of ['/test/form', '/test/module', 'http://127.0.0.1:18878/test/form']) test(`业务表单接入：${path}`, async ({ page }) => {
   await page.goto(path);
   const response = page.waitForResponse(r => r.url().endsWith('/captcha/v1/verify'));
   await page.getByRole('button', { name: '验证并提交', exact: true }).click();

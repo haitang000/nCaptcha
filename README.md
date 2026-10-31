@@ -8,7 +8,7 @@
 
 需要 **Node.js ≥22.5**。浏览器支持现代 Chrome、Edge、Firefox、Safari（需要 Shadow DOM、`dialog` 和 Pointer Events）。已自动验证 Chromium 桌面和移动触屏模式。包为 JavaScript ESM，并附带 TypeScript 声明。
 
-## 先运行示例
+## 构建与运行
 
 在 PowerShell 中：
 
@@ -16,14 +16,12 @@
 cd F:\code\CAPTCHA
 npm ci
 npm run build
-npm run demo
+Copy-Item .env.example .env
+# 在 .env 中填写 CAPTCHA_SECRET 和实际业务页面的 CAPTCHA_ALLOWED_ORIGINS。
+npm start
 ```
 
-打开 [Landing page 与在线体验](http://127.0.0.1:8787/)。首页可体验真实的 PoW 和图片回正验证，切换组件深浅主题，并将令牌提交到服务端核验；还提供验证机制介绍、可复制的接入代码和常见问题。
-
-原有 [普通 script 示例](http://127.0.0.1:8787/examples) 与 [ES module 示例](http://127.0.0.1:8787/module) 仍可运行；示例展示两个独立组件。点击“验证并提交”会先验证，再由业务后端消费令牌。
-
-Landing page 源码位于 `landing/`，随 `npm run build` 复制到 `dist/`。Workers 部署也会在根路径提供同一页面。公开的 `POST /demo/verify` 仅接受同源请求，只核验绑定当前 IP、用途为 `landing-demo` 的令牌；业务令牌仍由业务后端通过受密钥保护的 `/siteverify` 核验。
+服务仅提供验证码 API、可嵌入组件资源和 [健康检查](http://127.0.0.1:8787/health)。根路径 `/` 返回 404；将组件挂载到自己的业务页面，再由业务后端通过受密钥保护的 `/siteverify` 核验令牌。构建输出 `dist/` 仅包含四个客户端资源，接入代码见下文。
 
 ## 在 Node.js 服务内嵌入
 
@@ -176,7 +174,7 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 npm start
 ```
 
-另开一个终端，在相同目录运行 `npm run demo:standalone`，打开 [跨域接入示例](http://127.0.0.1:8788/)。示例从独立服务加载组件和挑战，业务后端通过 `/siteverify` 核验。密钥只出现在两个后端的 `.env` 中。
+在业务页面中按上面的浏览器接入方式配置独立服务的 `apiUrl` 和 `assetBaseUrl`，并将业务 origin 加入 `CAPTCHA_ALLOWED_ORIGINS`。业务后端通过 `/siteverify` 核验；`CAPTCHA_SECRET` 只保存在后端。
 
 一个服务实例对应一个业务。默认绑定 `127.0.0.1:8787`，健康检查为 `GET /health`。`.env` 仅在入口执行时读取；导入核心库或服务模块不会读环境、启动服务或定时任务。退出服务会释放其内存存储。
 
@@ -247,6 +245,6 @@ npm run test:package
 npm pack
 ```
 
-后端测试覆盖 PoW、伪造行为/设备标记、键盘重放、图片透明边界侧信道、统一容差、IPv6 等价地址、TTL、并发消费、限流、跨域和适配器。浏览器测试覆盖两个组件、取消/重试、销毁、过期、Worker 回退、键盘与移动操作，以及两种示例的真实业务提交。浏览器测试使用单独的测试服务和低难度参数，测试服务不进入分发包。
+后端测试覆盖 PoW、伪造行为/设备标记、键盘重放、图片透明边界侧信道、统一容差、IPv6 等价地址、TTL、并发消费、限流、跨域和适配器。浏览器测试覆盖两个组件、取消/重试、销毁、过期、Worker 回退、键盘与移动操作，以及普通 script、ES module 和跨域接入的真实业务提交。浏览器测试使用单独的测试服务和低难度参数，最小表单及模拟业务后端位于 `test/fixtures/`，均不进入分发包。
 
 `test:package` 构建并打包后，在 `.package-check` 中安装生成的 tgz，以安装后的路径验证库导出、图片、静态资源及业务令牌消费。发布包不需要运行时依赖。尚未发布到 npm，`private: true` 防止意外发布；没有擅自为提取代码或题图指定新的开源许可。

@@ -12,7 +12,7 @@ Copy-Item .dev.vars.example .dev.vars
 npm run workers:dev
 ```
 
-Wrangler 自动构建客户端与题图库。本地默认地址为 `http://127.0.0.1:8789`，健康检查是 `GET /health`。`.dev.vars` 仅供本地使用，已加入忽略规则，不进入分发包。
+Wrangler 自动构建客户端与题图库。本地默认地址为 `http://127.0.0.1:8789`，健康检查是 `GET /health`。服务仅提供验证码 API 和四个组件资源，根路径 `/` 返回 404。`.dev.vars` 仅供本地使用，已加入忽略规则，不进入分发包。
 
 前端接入：
 

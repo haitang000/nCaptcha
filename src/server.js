@@ -3,7 +3,6 @@ import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createCaptcha } from './index.js';
 import { createHttpHandler, sendJson } from './http.js';
-import { serveLanding } from './landing.js';
 import { CaptchaError } from './error.js';
 
 export function configFromEnv(env) {
@@ -33,9 +32,7 @@ export function startService(config) {
   const server = http.createServer(async (req, res) => {
     try {
       if (req.url === '/health' && req.method === 'GET') { sendJson(res, 200, { ok: true }); return; }
-      if (await handler(req, res) || await serveLanding(req, res, {
-        captcha, allowedOrigins: config.http?.allowedOrigins ?? [], trustedProxies: config.http?.trustedProxies ?? [],
-      })) return;
+      if (await handler(req, res)) return;
       sendJson(res, 404, { error: '未找到', code: 'NOT_FOUND' });
     } catch (err) {
       if (res.destroyed || res.writableEnded) return;

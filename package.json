@@ -34,8 +34,6 @@
     "src",
     "assets",
     "dist",
-    "landing",
-    "examples",
     "workers",
     ".workers/puzzles.js",
     "wrangler.jsonc",
@@ -58,8 +56,6 @@
     "test:types": "tsc --noEmit --strict --module NodeNext --target ES2022 --lib ES2022,DOM test/types.ts",
     "test:package": "node scripts/check-package.js",
     "start": "node src/server.js",
-    "demo": "node examples/embedded/server.js",
-    "demo:standalone": "node examples/standalone/server.js",
     "prepack": "npm run build:workers"
   },
   "devDependencies": {
