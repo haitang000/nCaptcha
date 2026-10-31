@@ -2,17 +2,17 @@ import crypto from 'node:crypto';
 import { isIP } from 'node:net';
 import fs from 'node:fs/promises';
 import { CaptchaError } from './error.js';
+import { normalizeIp } from './ip.js';
 
 const assetNames = new Set(['captcha.js', 'captcha.esm.js', 'captcha.css', 'pow-worker.js']);
 export function getClientIp(req, trustedProxies = []) {
   let ip = req.socket?.remoteAddress ?? '';
-  const normalize = value => value.startsWith('::ffff:') && isIP(value.slice(7)) === 4 ? value.slice(7) : value;
-  ip = normalize(ip);
+  ip = normalizeIp(ip);
   // 单层可信代理：只接受紧邻可信代理追加的最右侧地址，不信任客户端自报的首项。
-  if (trustedProxies.map(normalize).includes(ip)) {
+  if (trustedProxies.map(normalizeIp).includes(ip)) {
     const header = req.headers['x-forwarded-for'];
     const forwarded = typeof header === 'string' ? header.split(',').at(-1).trim() : '';
-    if (isIP(forwarded)) ip = normalize(forwarded);
+    if (isIP(forwarded)) ip = normalizeIp(forwarded);
   }
   return ip;
 }

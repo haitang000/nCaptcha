@@ -11,5 +11,6 @@ const pow = await engine.createPow(context);
 const result = await engine.verifyBehavior({ ...context, pow: { prefix: pow.prefix, nonce: '1' } });
 if ('token' in result) { const token: TokenResult = result; await engine.consumeToken({ ...context, token: token.token }); }
 else await engine.solveChallenge({ ...context, id: result.challenge.id, angle: 0, pointer: 'mouse', trajectory: [{ x: 1, y: 1, t: 0 }, { x: 3, y: 1, t: 50 }, { x: 4, y: 1, t: 120 }] });
+await engine.solveChallenge({ ...context, id: 'a'.repeat(32), angle: 0, pointer: 'keyboard', keyboard: { startAngle: 0, events: [{ key: 'Enter', control: 'range', t: 100 }] } });
 await store.update<{ count: number }, number>('test', record => ({ value: { count: (record?.count ?? 0) + 1 }, ttlMs: 1000, result: 1 }));
 widget.destroy(); await engine.close(); await store.close?.();

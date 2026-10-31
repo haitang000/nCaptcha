@@ -239,6 +239,15 @@ export function rotateToPng(pic, deg) {
   return encodePng(rotatePixels(pic, deg));
 }
 
+// 客户端只显示圆形区域。发送前清除外圈全部 RGBA，避免方形透明边角泄露旋转角度。
+export function rotatePuzzleToPng(pic, deg) {
+  const image = rotatePixels(pic, deg), center = image.w / 2, radius = Math.max(0, center - 2);
+  for (let y = 0; y < image.h; y++) for (let x = 0; x < image.w; x++) {
+    if ((x - center) ** 2 + (y - center) ** 2 > radius ** 2) image.rgba.fill(0, (y * image.w + x) * 4, (y * image.w + x) * 4 + 4);
+  }
+  return encodePng(image);
+}
+
 const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
 
 /**

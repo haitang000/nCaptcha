@@ -25,9 +25,12 @@ await fs.writeFile(path.join(directory, 'verify.mjs'), `
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { createCaptcha } from 'portable-captcha';
+import { createCaptcha, createMemoryStore } from 'portable-captcha';
 import { createHttpHandler } from 'portable-captcha/http';
-const c = createCaptcha({ powBits:0, minSolveMs:0, minTokenAgeMs:0 });
+const memory = createMemoryStore();
+let answer;
+const store = { ...memory, async set(key, value, ttl) { if (key.includes(':challenge:')) answer = value.answer; return memory.set(key, value, ttl); } };
+const c = createCaptcha({ store, powBits:0, minSolveMs:0, minTokenAgeMs:0 });
 const handler = createHttpHandler(c);
 const server = http.createServer(async (req,res)=>{ if (!await handler(req,res)) { res.writeHead(404);res.end(); } });
 server.listen(0,'127.0.0.1'); await once(server,'listening');
@@ -41,11 +44,13 @@ try {
   await c.cancelChallenge({...ctx,id:challenge.id});
   c.setMode('normal');
   const next = await c.createPow(ctx);
-  const result = await c.verifyBehavior({...ctx,pow:{prefix:next.prefix,nonce:'0'},formBehavior:{totalMs:5000,focusOrder:['a','b'],fields:{a:{n:6,meanGap:100,varGap:300},b:{n:6,meanGap:100,varGap:300}}}});
+  const checked = await c.verifyBehavior({...ctx,pow:{prefix:next.prefix,nonce:'0'},formBehavior:{totalMs:5000,focusOrder:['a','b'],fields:{a:{n:6,meanGap:100,varGap:300},b:{n:6,meanGap:100,varGap:300}}}});
+  assert.ok(checked.challenge); assert.equal(checked.token, undefined);
+  const result = await c.solveChallenge({...ctx,id:checked.challenge.id,angle:-answer,trajectory:[{x:0,y:0,t:0},{x:20,y:0,t:40},{x:25,y:0,t:100}]});
   assert.equal(await c.consumeToken({...ctx,token:result.token}),true);
   assert.equal(await c.consumeToken({...ctx,token:result.token}),false);
   console.log('安装后的包：库、题图、HTTP 静态资源及一次性业务消费均通过。');
-} finally { server.closeAllConnections(); await new Promise(r=>server.close(r)); await c.close(); }
+} finally { server.closeAllConnections(); await new Promise(r=>server.close(r)); await c.close(); await memory.close(); }
 `);
 console.log(run(process.execPath, ['verify.mjs'], directory).trim());
 console.log(`分发包：${path.join(root, info.filename)}（${info.files.length} 个文件）`);

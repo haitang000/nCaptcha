@@ -1,4 +1,5 @@
 import { createTracking, createChallengeTracking } from './tracking.js';
+import { isRotationKey, keyboardAngle } from './keyboard.js';
 import { solvePow, delay, abortError } from './pow.js';
 import logo from './logo.svg';
 
@@ -213,14 +214,15 @@ export function render(container, options = {}) {
       listen(range, 'pointerdown', () => { keyboardAdjusting = false; rangeCancelled = false; });
       listen(range, 'pointercancel', () => { rangeCancelled = true; });
       listen(range, 'change', () => { if (!keyboardAdjusting && !rangeCancelled) void submit(); });
-      listen(range, 'keydown', e => {
-        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) keyboardAdjusting = true;
-        if (e.key === 'Enter') { e.preventDefault(); void submit(); }
-      });
-      listen(stage, 'keydown', e => {
-        if (['ArrowLeft', 'ArrowRight'].includes(e.key)) { e.preventDefault(); paint(deg + (e.key === 'ArrowLeft' ? -15 : 15)); }
-        if (e.key === 'Enter') { e.preventDefault(); void submit(); }
-      });
+      function keydown(e, control) {
+        if (!isRotationKey(e.key) || submitting || settled) return;
+        e.preventDefault(); keyboardAdjusting = true;
+        challengeTracking.recordKey(e.key, control, deg);
+        if (e.key === 'Enter') void submit();
+        else paint(keyboardAngle(Math.round(deg), e.key, control));
+      }
+      listen(range, 'keydown', e => keydown(e, 'range'));
+      listen(stage, 'keydown', e => keydown(e, 'stage'));
       listen(stage, 'pointerdown', e => { if (e.button !== 0 || submitting) return; drag = { offset: angleOf(e) - deg, pointer: e.pointerId, moved: false }; stage.setPointerCapture(e.pointerId); stage.classList.add('dragging'); e.preventDefault(); });
       listen(stage, 'pointermove', e => { if (drag && e.pointerId === drag.pointer) { drag.moved = true; paint(angleOf(e) - drag.offset); } });
       listen(stage, 'pointerup', e => { if (!drag || e.pointerId !== drag.pointer) return; const moved = drag.moved; drag = null; stage.classList.remove('dragging'); if (moved) void submit(); });

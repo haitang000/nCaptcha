@@ -67,7 +67,7 @@ server.on('close', () => { void captcha.close(); });
 server.listen(8080);
 ```
 
-业务表单的来源校验、会话和业务限流仍由宿主管理。若存在反向代理，签发和核验令牌应使用**同一套真实 IP 提取规则**。原生 IPv4 映射地址（如 `::ffff:127.0.0.1`）会自动规范化。
+业务表单的来源校验、会话和业务限流仍由宿主管理。若存在反向代理，签发和核验令牌应使用**同一套真实 IP 提取规则**。IPv6 的等价压缩/展开写法、大小写及 IPv4 映射地址会统一规范化，共享限流、失败声誉和令牌绑定。全局地址中无意义的作用域后缀会移除，链路本地地址的有效接口作用域仍保留，以免扩大可信代理范围。
 
 Express 无需额外安装适配器包：
 
@@ -163,7 +163,9 @@ PoW 默认在挂载时预热；Worker 和主线程回退都复用 SHA-256 单块
 
 图片回正弹窗采用圆形预览与胶囊滑块，松开滑块自动验证。鼠标和触屏均可拖动；键盘可用方向键微调后按 Enter 确认，Escape 或点击弹窗外可取消。图片拖动操作仍保留。`--captcha-track` 可自定义滑轨背景色。
 
-图片验证期间会独立采集本轮弹窗内的鼠标、触屏或笔轨迹，提交答案时由服务端同时检查轨迹与角度。缺失轨迹、静止点、过短操作和鼠标匀速等间隔轨迹会被拒绝；支持正常的直线滑动及短距离微调。轨迹最多提交 100 个点，换题时清空，取消、重置或销毁时移除监听。键盘操作明确提交 `pointer: 'keyboard'`，不要求鼠标轨迹。
+图片验证期间会独立采集本轮弹窗内的鼠标、触屏或笔轨迹，提交答案时由服务端同时检查轨迹与角度。缺失轨迹、静止点、过短操作和机械匀速等间隔轨迹会被拒绝；支持正常的直线滑动及短距离微调。轨迹最多提交 100 个点，换题时清空，取消、重置或销毁时移除监听。键盘操作提交 `pointer: 'keyboard'` 与按键记录，服务端重放按键后核对最终角度；仅改变输入方式字段不能跳过行为校验。指针与键盘混合操作会保留并检查已有指针轨迹。
+
+启用验证码时始终要求完成 PoW 与图片挑战。原 `normal` 模式作为兼容名称保留，已取消根据客户端填写统计或轨迹评分直接签发令牌的路径。题图下发前会清除圆形显示区域外的全部 RGBA 数据，避免原始方形画布的透明边角泄露旋转信息。行为记录仍可由客户端伪造，不能代替图片答案、服务端等待时间与一次性令牌校验。
 
 ## 独立服务：其他语言也能接入
 
@@ -196,13 +198,15 @@ Content-Type: application/json
 | --- | --- | --- |
 | GET `/pow?action=register` | 用途查询参数 | `{ prefix, bits, expiresInMs }` |
 | POST `/verify` | `{ action, pow:{prefix,nonce}, trajectory?, formBehavior?, hints? }` | 令牌结果或 `{ challenge:{id,image,expiresInMs} }` |
-| POST `/challenge` | `{ action, id, angle, pointer?, trajectory?, hints? }` | `{ token, expiresInMs, usableAfterMs }` |
+| POST `/challenge` | `{ action, id, angle, pointer?, trajectory?, keyboard?, hints? }` | `{ token, expiresInMs, usableAfterMs }` |
 | POST `/cancel` | `{ action, id }` | `{ cancelled:boolean }` |
 | POST `/siteverify` | 服务端密钥和 `{ token, ip, action }` | `{ success:boolean }` |
 
 浏览器接口的 IP 只由连接地址/可信代理解析，忽略请求体中的 `ip`。角度为客户端 CSS 顺时针旋转量，整数或有限小数均可；图片已顺时针旋转，所以正确提交值对应服务端角度的负值。失败后 `ANGLE_INCORRECT` 可继续微调；`CHALLENGE_EXHAUSTED/CHALLENGE_EXPIRED` 必须重新验证。
 
-`/challenge` 的 `trajectory` 为本轮图片验证的 `{x,y,t}[]`，`t` 为相对首个点的毫秒数且严格递增，至少需要 3 个点并覆盖 80ms。鼠标、触屏、笔操作必须提供轨迹；自定义客户端需同步适配，旧客户端仅提交角度会返回 `BEHAVIOR_REJECTED`。缺失或低质量轨迹同样消耗本题尝试次数并计入失败声誉；浏览器组件收到 `BEHAVIOR_REJECTED` 会在当前弹窗中自动换题。键盘模式和轨迹均为客户端自报信息，仍属于启发式判断。
+`/challenge` 的 `trajectory` 为本轮图片验证的 `{x,y,t}[]`，`t` 从 0 开始且严格递增，至少需要 3 个点并覆盖 80ms，不能超过服务端记录的挑战已用时间（允许 250ms 时钟误差）。鼠标、触屏、笔使用相同的轨迹规则和服务端配置的角度容差。缺失或低质量轨迹同样消耗本题尝试次数并计入失败声誉；浏览器组件收到 `BEHAVIOR_REJECTED` 会在当前弹窗中自动换题。
+
+键盘客户端须提交 `keyboard: { startAngle, events: [{ key, control, t }] }`。`startAngle` 为开始键盘操作时的整数角度，纯键盘从 0 开始；非零起点还需提供通过检查的指针轨迹。`control` 为 `range` 或 `stage`；方向键分别调整 1° 或 15°，PageUp/Down 为对应步长的 10 倍，Home/End 为 0°/359°。滑块在边界处截断，图片区域循环旋转。最多 512 条记录，`t` 为本轮交互开始后的毫秒数，严格递增，末条必须是 Enter，至少经过 80ms，并与服务端时间和提交角度相符。自定义客户端需同步更新；仅提交 `pointer: 'keyboard'` 会返回 `BEHAVIOR_REJECTED`。
 
 `CAPTCHA_ALLOWED_ORIGINS` 配置精确来源白名单（含协议和非默认端口，无末尾斜杠），多个来源用逗号分隔。浏览器同源 POST 也可能带 Origin，需将业务自身 origin 列入。未携带 Origin 的服务端请求仍可访问公开挑战接口；来源白名单不是身份认证。
 
@@ -214,9 +218,9 @@ Content-Type: application/json
 
 | 配置 | 默认值 | 含义 |
 | --- | --- | --- |
-| `enabled` / `mode` | `true` / `strict` | 普通模式允许高分行为直接通过，严格模式始终出图；关闭后直接签发令牌 |
+| `enabled` / `mode` | `true` / `strict` | 启用时始终要求图片挑战；`normal` 为已弃用的兼容别名，行为评分不能直接放行；显式关闭后直接签发令牌 |
 | `powBits` | 20 | 基础难度，允许 0–28；最近失败多时最多增加 4 位，总计不超过 28 |
-| `tolerance` | 10 | 回正容差，触屏/笔额外放宽 4°，不超过 15° |
+| `tolerance` | 10 | 所有输入方式共用的回正容差，不根据客户端自报设备类型放宽 |
 | `minSolveMs` / `minTokenAgeMs` | 1000 / 300 | 最低求解和令牌使用间隔 |
 | `powTtlMs` | 120000 | PoW 有效期 |
 | `tokenTtlMs` / `challengeTtlMs` | 300000 / 300000 | 令牌/图片挑战有效期 |
@@ -243,6 +247,6 @@ npm run test:package
 npm pack
 ```
 
-后端测试覆盖 PoW、行为评分、实际像素旋转、触屏容差、TTL、并发消费、限流、跨域和适配器。浏览器测试覆盖两个组件、取消/重试、销毁、过期、Worker 回退、键盘与移动操作，以及两种示例的真实业务提交。浏览器测试使用单独的测试服务和低难度参数，测试服务不进入分发包。
+后端测试覆盖 PoW、伪造行为/设备标记、键盘重放、图片透明边界侧信道、统一容差、IPv6 等价地址、TTL、并发消费、限流、跨域和适配器。浏览器测试覆盖两个组件、取消/重试、销毁、过期、Worker 回退、键盘与移动操作，以及两种示例的真实业务提交。浏览器测试使用单独的测试服务和低难度参数，测试服务不进入分发包。
 
 `test:package` 构建并打包后，在 `.package-check` 中安装生成的 tgz，以安装后的路径验证库导出、图片、静态资源及业务令牌消费。发布包不需要运行时依赖。尚未发布到 npm，`private: true` 防止意外发布；没有擅自为提取代码或题图指定新的开源许可。

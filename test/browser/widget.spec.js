@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { rotateByKeyboard } from './keyboard-helper.js';
 const options = { apiUrl: '/captcha/v1', assetBaseUrl: '/captcha/assets/', action: 'demo', prewarm: false };
 test.beforeEach(async ({ page }) => {
   const errors = [];
@@ -22,8 +23,7 @@ async function answer(page, challenge, host = '#one') {
   const angle = (360 - state[challenge.id].answer) % 360;
   const root = page.locator(host);
   await page.waitForTimeout(120);
-  await root.locator('input[type=range]').evaluate((el, value) => { el.value = String(value); el.dispatchEvent(new Event('input', { bubbles: true })); }, angle);
-  await root.locator('input[type=range]').press('Enter');
+  await rotateByKeyboard(root.locator('input[type=range]'), angle);
 }
 
 test('完整验证等待令牌可用后回调，服务端消费且拒绝重放', async ({ page }) => {
@@ -139,8 +139,7 @@ for (const path of ['/examples', '/module', 'http://127.0.0.1:18878/']) test(`�
   const state = await (await page.request.get('http://127.0.0.1:18877/state')).json();
   const angle = (360 - state[challenge.id].answer) % 360;
   await page.waitForTimeout(120);
-  await page.locator('#captcha input[type=range]').evaluate((el, value) => { el.value = String(value); el.dispatchEvent(new Event('input')); }, angle);
-  await page.locator('#captcha input[type=range]').press('Enter');
+  await rotateByKeyboard(page.locator('#captcha input[type=range]'), angle);
   await expect(page.locator('#result')).toHaveText('业务提交成功：后端已核验并消费令牌');
 });
 test('参考图卡片比例、六点滑块和纯图片圆形预览', async ({ page, isMobile }) => {
@@ -166,8 +165,7 @@ test('滑块键盘微调不提前提交，Enter 确认且网络过程中禁止�
   await range.focus(); await range.press('ArrowRight');
   expect(await range.inputValue()).toBe('1'); expect(requests).toBe(0);
   const state = await (await page.request.get('/state')).json();
-  await range.evaluate((el, answer) => { el.value = String(answer); el.dispatchEvent(new Event('input')); }, (360 - state[challenge.id].answer) % 360);
-  await range.press('Enter');
+  await rotateByKeyboard(range, (360 - state[challenge.id].answer) % 360);
   await expect(range).toBeDisabled();
   await range.evaluate(el => { el.dispatchEvent(new Event('change')); el.dispatchEvent(new Event('change')); });
   await expect(page.locator('.widget')).toHaveClass(/verified/); expect(requests).toBe(1);

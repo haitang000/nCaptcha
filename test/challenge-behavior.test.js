@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fixture, ctx, verify, challengeTrajectory } from './helpers.js';
+import { fixture, ctx, verify, challengeTrajectory, keyboardForAngle } from './helpers.js';
 
 const code = expected => error => error.code === expected;
 const uniform = Array.from({ length: 8 }, (_, i) => ({ x: 100 + i * 10, y: 200, t: i * 30 }));
@@ -38,9 +38,9 @@ test('图片轨迹格式、点数、时间和屏幕范围均在服务端校验',
 test('图片轨迹支持直线、短距离微调、固定刷新率、触屏、笔和纯键盘', async t => {
   const short = [{ x: 100, y: 200, t: 0 }, { x: 101, y: 200, t: 45 }, { x: 102, y: 200, t: 130 }];
   for (const [pointer, trajectory] of [['mouse', challengeTrajectory], ['mouse', short],
-    ['mouse', challengeTrajectory.map((p, i) => ({ ...p, t: i * 30 }))], ['touch', uniform], ['pen', uniform], ['keyboard', null]]) {
+    ['mouse', challengeTrajectory.map((p, i) => ({ ...p, t: i * 30 }))], ['touch', challengeTrajectory], ['pen', challengeTrajectory], ['keyboard', null]]) {
     const f = await challengeFor(t);
-    assert.ok((await f.captcha.solveChallenge({ ...f.input, pointer, trajectory })).token);
+    assert.ok((await f.captcha.solveChallenge({ ...f.input, pointer, trajectory, keyboard: pointer === 'keyboard' ? keyboardForAngle(f.input.angle) : null })).token);
   }
 });
 

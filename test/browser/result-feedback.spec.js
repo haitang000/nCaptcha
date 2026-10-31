@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { rotateByKeyboard } from './keyboard-helper.js';
 
 async function mount(page) {
   await page.goto('/test');
@@ -21,10 +22,7 @@ async function submit(page, angleOffset = 0) {
 }
 async function answer(page, challenge, angleOffset = 0) {
   const state = await (await page.request.get('/state')).json();
-  await page.locator('.range').evaluate((el, value) => {
-    el.value = String(value); el.dispatchEvent(new Event('input'));
-  }, (360 - state[challenge.id].answer + angleOffset) % 360);
-  await page.locator('.range').press('Enter');
+  await rotateByKeyboard(page.locator('.range'), (360 - state[challenge.id].answer + angleOffset) % 360);
 }
 test.beforeEach(async ({ page }) => {
   page.__errors = []; page.on('pageerror', error => page.__errors.push(error.message));

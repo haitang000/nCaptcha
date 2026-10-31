@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { rotateByKeyboard } from './keyboard-helper.js';
 
 async function start(page) {
   await page.goto('/test');
@@ -81,14 +82,26 @@ test('换题清空旧轨迹，缺失本轮轨迹自动换题后仍可正常通�
   await expect(page.locator('.widget')).toHaveClass(/verified/);
 });
 
-test('键盘确认明确标记 keyboard，无鼠标轨迹也可通过', async ({ page }) => {
+test('键盘使用可重放的调整记录，无鼠标轨迹也可通过', async ({ page }) => {
   const challenge = await start(page);
   const state = await (await page.request.get('/state')).json();
-  await page.locator('.range').evaluate((el, angle) => { el.value = String(angle); el.dispatchEvent(new Event('input')); }, (360 - state[challenge.id].answer) % 360);
   const response = page.waitForResponse(r => r.url().endsWith('/captcha/v1/challenge') && r.status() === 200);
-  await page.locator('.range').press('Enter');
+  await rotateByKeyboard(page.locator('.range'), (360 - state[challenge.id].answer) % 360);
   const submitted = await response;
   expect(submitted.request().postDataJSON()).toMatchObject({ pointer: 'keyboard', trajectory: null });
+  expect(submitted.request().postDataJSON().keyboard.events.at(-1).key).toBe('Enter');
   expect(submitted.status()).toBe(200);
+  await expect(page.locator('.widget')).toHaveClass(/verified/);
+});
+
+test('公开接口拒绝只改报 keyboard，随后真实键盘操作仍可完成同一题', async ({ page }) => {
+  const challenge = await start(page);
+  const state = await (await page.request.get('/state')).json();
+  const angle = (360 - state[challenge.id].answer) % 360;
+  await page.waitForTimeout(120);
+  const response = await page.request.post('/captcha/v1/challenge', { data: { action: 'demo', id: challenge.id, angle, pointer: 'keyboard' } });
+  expect(response.status()).toBe(400);
+  expect((await response.json()).code).toBe('BEHAVIOR_REJECTED');
+  await rotateByKeyboard(page.locator('.range'), angle);
   await expect(page.locator('.widget')).toHaveClass(/verified/);
 });

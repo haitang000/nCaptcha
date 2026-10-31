@@ -25,11 +25,11 @@ test('PoW 正确、错误、重放、过期及 IP/用途绑定', async t => {
     } finally { await f.close(); }
   });
 });
-test('普通模式接受高分行为，弱/缺失信号和严格模式出图片', async () => {
+test('普通模式与严格模式均要求图片验证，伪造高分行为不能直接拿令牌', async () => {
   const f = fixture({ mode: 'normal' });
   const formBehavior = { totalMs: 5000, focusOrder: ['a', 'b'], fields: { a: { n: 6, meanGap: 100, varGap: 200 }, b: { n: 6, meanGap: 120, varGap: 250 } } };
   try {
-    assert.ok((await verify(f.captcha, ctx, { formBehavior })).token);
+    assert.ok((await verify(f.captcha, ctx, { formBehavior })).challenge);
     assert.ok((await verify(f.captcha)).challenge);
     f.captcha.setMode('strict');
     assert.ok((await verify(f.captcha, ctx, { formBehavior })).challenge);
@@ -47,8 +47,8 @@ test('非法行为数据返回稳定错误；失败声誉会增加难度且会�
     await assert.rejects(f.captcha.createPow({ ...ctx, action: '../../x' }), code('INVALID_INPUT'));
   } finally { await f.close(); }
 });
-test('图片答案方向、跨 0° 容差、触屏容差和错误角度', async t => {
-  for (const [pointer, offset, pass] of [['mouse', 10, true], ['mouse', 12, false], ['touch', 14, true], ['pen', 14, true], ['touch', 16, false]]) await t.test(pointer + offset, async () => {
+test('图片答案方向与跨 0° 容差一致，改报触屏或笔不会扩大通过范围', async t => {
+  for (const [pointer, offset, pass] of [['mouse', 10, true], ['mouse', 12, false], ['touch', 10, true], ['pen', 10, true], ['touch', 12, false], ['pen', 12, false]]) await t.test(pointer + offset, async () => {
     const f = fixture();
     try {
       const { challenge } = await verify(f.captcha);

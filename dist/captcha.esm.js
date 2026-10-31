@@ -17,27 +17,34 @@ function pushPoint(points, event) {
 function createChallengeTracking(element) {
   const listeners = new AbortController(), points = [];
   const initialPointer = element.ownerDocument.defaultView.matchMedia("(pointer: coarse)").matches ? "touch" : "mouse";
-  let pointer = initialPointer;
+  let pointer = initialPointer, keyboard = null, startedAt = performance.now();
   const record = (event) => {
-    pointer = event.pointerType || initialPointer;
+    if (event.type === "pointerdown") keyboard = null;
+    if (!keyboard) pointer = event.pointerType || initialPointer;
     pushPoint(points, event);
   };
   const listen = (type, fn) => element.addEventListener(type, fn, { capture: true, passive: true, signal: listeners.signal });
   for (const type of ["pointerdown", "pointermove", "pointerup"]) listen(type, record);
-  listen("keydown", (event) => {
-    if (event.target.matches?.('input[type="range"], [role="slider"]') && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Enter"].includes(event.key)) pointer = "keyboard";
-  });
   return {
+    recordKey(key, control, angle) {
+      pointer = "keyboard";
+      keyboard ??= { startAngle: Math.round(angle) % 360, events: [] };
+      const t = Math.max(performance.now() - startedAt, (keyboard.events.at(-1)?.t ?? -1) + 1e-3);
+      if (keyboard.events.length <= 512) keyboard.events.push({ key, control, t });
+    },
     snapshot() {
-      return { pointer, trajectory: pointer === "keyboard" ? null : sampleTrajectory(points, 100, 3) };
+      return { pointer, trajectory: sampleTrajectory(points, 100, 3), keyboard: keyboard ? { ...keyboard, events: keyboard.events.map((event) => ({ ...event })) } : null };
     },
     reset() {
       points.length = 0;
       pointer = initialPointer;
+      keyboard = null;
+      startedAt = performance.now();
     },
     cleanup() {
       listeners.abort();
       points.length = 0;
+      keyboard = null;
     }
   };
 }
@@ -148,6 +155,20 @@ function createTracking(anchor, form) {
       fields.clear();
     }
   };
+}
+
+// src/client/keyboard.js
+var keys = /* @__PURE__ */ new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Enter"]);
+function isRotationKey(key) {
+  return keys.has(key);
+}
+function keyboardAngle(angle, key, control) {
+  if (key === "Home") return 0;
+  if (key === "End") return 359;
+  const step = control === "stage" ? 15 : 1;
+  const delta = ["ArrowLeft", "ArrowDown"].includes(key) ? -step : ["ArrowRight", "ArrowUp"].includes(key) ? step : key === "PageUp" ? 10 * step : key === "PageDown" ? -10 * step : 0;
+  const next = angle + delta;
+  return control === "stage" ? (next % 360 + 360) % 360 : Math.max(0, Math.min(359, next));
 }
 
 // src/client/hash.js
@@ -707,23 +728,16 @@ function render(container, options = {}) {
       listen(range, "change", () => {
         if (!keyboardAdjusting && !rangeCancelled) void submit();
       });
-      listen(range, "keydown", (e) => {
-        if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) keyboardAdjusting = true;
-        if (e.key === "Enter") {
-          e.preventDefault();
-          void submit();
-        }
-      });
-      listen(stage, "keydown", (e) => {
-        if (["ArrowLeft", "ArrowRight"].includes(e.key)) {
-          e.preventDefault();
-          paint(deg + (e.key === "ArrowLeft" ? -15 : 15));
-        }
-        if (e.key === "Enter") {
-          e.preventDefault();
-          void submit();
-        }
-      });
+      function keydown(e, control) {
+        if (!isRotationKey(e.key) || submitting || settled) return;
+        e.preventDefault();
+        keyboardAdjusting = true;
+        challengeTracking.recordKey(e.key, control, deg);
+        if (e.key === "Enter") void submit();
+        else paint(keyboardAngle(Math.round(deg), e.key, control));
+      }
+      listen(range, "keydown", (e) => keydown(e, "range"));
+      listen(stage, "keydown", (e) => keydown(e, "stage"));
       listen(stage, "pointerdown", (e) => {
         if (e.button !== 0 || submitting) return;
         drag = { offset: angleOf(e) - deg, pointer: e.pointerId, moved: false };

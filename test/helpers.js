@@ -2,9 +2,14 @@ import crypto from 'node:crypto';
 import { createCaptcha, createMemoryStore } from '../src/index.js';
 export const ctx = { ip: '127.0.0.1', action: 'login' };
 export const challengeTrajectory = [
-  { x: 100, y: 200, t: 0 }, { x: 105, y: 200, t: 30 }, { x: 125, y: 201, t: 85 },
-  { x: 165, y: 200, t: 140 }, { x: 200, y: 201, t: 210 }, { x: 215, y: 200, t: 300 }, { x: 218, y: 200, t: 420 },
+  { x: 100, y: 200, t: 0 }, { x: 105, y: 200, t: 15 }, { x: 125, y: 201, t: 43 },
+  { x: 165, y: 200, t: 70 }, { x: 200, y: 201, t: 105 }, { x: 215, y: 200, t: 150 }, { x: 218, y: 200, t: 210 },
 ];
+export function keyboardForAngle(angle) {
+  angle = ((angle % 360) + 360) % 360;
+  const keys = ['Home', ...Array(Math.floor(angle / 10)).fill('PageUp'), ...Array(angle % 10).fill('ArrowRight'), 'Enter'];
+  return { startAngle: 0, events: keys.map((key, i) => ({ key, control: 'range', t: 100 + i * 3 })) };
+}
 export function fixture(options = {}) {
   let time = 100000;
   const records = new Map();
@@ -30,5 +35,6 @@ export async function verify(captcha, context = ctx, signals = {}) {
 }
 export async function solved(f, context = ctx, pointer = 'mouse') {
   const { challenge } = await verify(f.captcha, context);
-  return f.captcha.solveChallenge({ ...context, id: challenge.id, angle: -f.answer(challenge.id), pointer, trajectory: challengeTrajectory });
+  const angle = -f.answer(challenge.id);
+  return f.captcha.solveChallenge({ ...context, id: challenge.id, angle, pointer, trajectory: challengeTrajectory, keyboard: pointer === 'keyboard' ? keyboardForAngle(angle) : null });
 }

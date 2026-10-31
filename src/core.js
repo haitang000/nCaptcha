@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { isIP } from 'node:net';
-import { obscurePuzzle, rotateToPng } from './image-codec.js';
-import { analyzeTrajectory, analyzeFormBehavior, validSignals, passesChallengeTrajectory } from './signals.js';
+import { obscurePuzzle, rotatePuzzleToPng } from './image-codec.js';
+import { validSignals, passesChallengeTrajectory, passesKeyboardBehavior } from './signals.js';
+import { normalizeIp } from './ip.js';
 import { createMemoryStore } from './store.js';
 import { CaptchaError, invalid } from './error.js';
 export { createMemoryStore, CaptchaError };
@@ -20,9 +21,7 @@ function zeroBits(bytes) {
 export function validateContext({ ip, action = 'default' } = {}) {
   if (typeof ip !== 'string' || !isIP(ip)) throw invalid('ip 必须是有效的 IPv4 或 IPv6 地址');
   if (typeof action !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(action)) throw invalid('action 需为 1–64 位字母、数字或 _ . : -');
-  // 将 IPv4 映射地址统一，避免原生 HTTP 与业务框架给出的格式不同。
-  if (ip.startsWith('::ffff:') && isIP(ip.slice(7)) === 4) ip = ip.slice(7);
-  return { ip, action };
+  return { ip: normalizeIp(ip), action };
 }
 
 export function resolveCaptchaOptions(options = {}) {
@@ -50,7 +49,6 @@ export function createCaptchaCore(options = {}, loadPictures) {
   const pictures = config.enabled ? loadPictures() : [];
   if (config.enabled && !pictures.length) { if (!options.store) void store.close(); throw new Error('未找到可解码的 PNG 题图，请检查 imagesDir'); }
   let closed = false;
-  let mode = config.mode;
   const key = (kind, id) => `${namespace}:${kind}:${id}`;
   const ensureOpen = () => { if (closed) throw new CaptchaError('CLOSED', '验证码实例已关闭', 503); };
   function context(input) { ensureOpen(); if (!input || typeof input !== 'object' || Array.isArray(input)) throw invalid(); return validateContext(input); }
@@ -94,7 +92,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
     if (!reserved) throw new CaptchaError('CHALLENGE_LIMIT', '未解挑战数量已达上限，请取消旧挑战或稍后重试', 429);
     try {
       const answer = crypto.randomInt(360);
-      const image = rotateToPng(obscurePuzzle(pictures[crypto.randomInt(pictures.length)]), answer);
+      const image = rotatePuzzleToPng(obscurePuzzle(pictures[crypto.randomInt(pictures.length)]), answer);
       await store.set(key('challenge', id), { ...ctx, answer, createdAt: now(), expiresAt, tries: config.challengeTries }, config.challengeTtlMs);
       return { challenge: { id, image: `data:image/png;base64,${image.toString('base64')}`, expiresInMs: config.challengeTtlMs } };
     } catch (err) { await release(ctx.ip, id); throw err; }
@@ -119,25 +117,22 @@ export function createCaptchaCore(options = {}, loadPictures) {
       }));
       if (!accepted) { await reputation(ctx.ip, true); throw new CaptchaError('POW_INVALID', '计算凭证无效或已过期，请重新验证'); }
       if (!validSignals(trajectory, formBehavior, hints)) { await reputation(ctx.ip, true); throw invalid(); }
-      if (mode === 'strict' || (!trajectory && !formBehavior)) return challenge(ctx);
-      const trajPass = 4 + crypto.randomInt(2), formPass = 3 + crypto.randomInt(2);
-      const touch = hints?.coarse || hints?.pointer === 'touch' || hints?.pointer === 'pen';
-      const trajectoryPass = !!trajectory && analyzeTrajectory(trajectory, touch) >= trajPass;
-      const formPasses = !!formBehavior && analyzeFormBehavior(formBehavior) >= formPass;
-      const passed = touch ? trajectoryPass || formPasses : (!trajectory || trajectoryPass) && (!formBehavior || formPasses);
-      return passed ? mint(ctx) : challenge(ctx);
+      // 行为数据全部由客户端自报，不能单独作为签发凭据；normal 保留为兼容别名。
+      return challenge(ctx);
     },
     async solveChallenge(input) {
       const ctx = context(input); await throttle(ctx.ip);
-      const { id, angle, pointer = 'mouse', trajectory = null, hints = null } = input;
+      const { id, angle, pointer = 'mouse', trajectory = null, hints = null, keyboard = null } = input;
       if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id) || !Number.isFinite(angle) || Math.abs(angle) > 360000 || !['mouse', 'touch', 'pen', 'keyboard'].includes(pointer)) throw invalid();
       if (!validSignals(trajectory, null, hints)) { await reputation(ctx.ip, true); throw invalid(); }
       const result = await store.update(key('challenge', id), record => {
         if (!record) return { result: { code: 'CHALLENGE_EXPIRED' } };
         if (!same(record, ctx)) return { result: { code: 'BINDING_MISMATCH', releaseIp: record.ip } };
         if (now() - record.createdAt < config.minSolveMs) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'TOO_FAST', retryAfterMs: config.minSolveMs - (now() - record.createdAt) } };
-        const tolerance = ['touch', 'pen'].includes(pointer) ? Math.min(config.tolerance + 4, 15) : config.tolerance;
-        const behaviorPasses = pointer === 'keyboard' || passesChallengeTrajectory(trajectory, pointer === 'touch' || pointer === 'pen');
+        const tolerance = config.tolerance;
+        const elapsedMs = now() - record.createdAt;
+        const pointerPasses = !!trajectory && trajectory[0].t === 0 && trajectory.at(-1).t <= elapsedMs + 250 && passesChallengeTrajectory(trajectory);
+        const behaviorPasses = pointer === 'keyboard' ? passesKeyboardBehavior(keyboard, angle, elapsedMs, pointerPasses) : pointerPasses;
         if (behaviorPasses && Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { success: true, releaseIp: record.ip } };
         record.tries--;
         const code = !record.tries ? 'CHALLENGE_EXHAUSTED' : behaviorPasses ? 'ANGLE_INCORRECT' : 'BEHAVIOR_REJECTED';
@@ -170,7 +165,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
         return { result: true };
       });
     },
-    setMode(value) { ensureOpen(); if (!['normal', 'strict'].includes(value)) throw invalid('mode 只能是 normal 或 strict'); mode = value; },
+    setMode(value) { ensureOpen(); if (!['normal', 'strict'].includes(value)) throw invalid('mode 只能是 normal 或 strict'); },
     async close() { if (closed) return; closed = true; if (!options.store) await store.close(); },
   };
 }

@@ -19,18 +19,25 @@ function pushPoint(points, event) {
 export function createChallengeTracking(element) {
   const listeners = new AbortController(), points = [];
   const initialPointer = element.ownerDocument.defaultView.matchMedia('(pointer: coarse)').matches ? 'touch' : 'mouse';
-  let pointer = initialPointer;
-  const record = event => { pointer = event.pointerType || initialPointer; pushPoint(points, event); };
+  let pointer = initialPointer, keyboard = null, startedAt = performance.now();
+  const record = event => {
+    if (event.type === 'pointerdown') keyboard = null;
+    if (!keyboard) pointer = event.pointerType || initialPointer;
+    pushPoint(points, event);
+  };
   const listen = (type, fn) => element.addEventListener(type, fn, { capture: true, passive: true, signal: listeners.signal });
   for (const type of ['pointerdown', 'pointermove', 'pointerup']) listen(type, record);
-  listen('keydown', event => {
-    if (event.target.matches?.('input[type="range"], [role="slider"]') &&
-      ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Enter'].includes(event.key)) pointer = 'keyboard';
-  });
   return {
-    snapshot() { return { pointer, trajectory: pointer === 'keyboard' ? null : sampleTrajectory(points, 100, 3) }; },
-    reset() { points.length = 0; pointer = initialPointer; },
-    cleanup() { listeners.abort(); points.length = 0; },
+    recordKey(key, control, angle) {
+      pointer = 'keyboard';
+      keyboard ??= { startAngle: Math.round(angle) % 360, events: [] };
+      // 隐私模式下时钟可能被降精度；保留按键顺序，不丢弃同一时间格内的调整。
+      const t = Math.max(performance.now() - startedAt, (keyboard.events.at(-1)?.t ?? -1) + .001);
+      if (keyboard.events.length <= 512) keyboard.events.push({ key, control, t });
+    },
+    snapshot() { return { pointer, trajectory: sampleTrajectory(points, 100, 3), keyboard: keyboard ? { ...keyboard, events: keyboard.events.map(event => ({ ...event })) } : null }; },
+    reset() { points.length = 0; pointer = initialPointer; keyboard = null; startedAt = performance.now(); },
+    cleanup() { listeners.abort(); points.length = 0; keyboard = null; },
   };
 }
 

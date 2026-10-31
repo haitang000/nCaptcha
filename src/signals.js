@@ -1,4 +1,6 @@
-// 从 localhosting 的行为评分实现提取。信号为客户端自报，只作为启发式证据。
+import { isRotationKey, keyboardAngle } from './client/keyboard.js';
+
+// 保留原有行为评分供分析使用；客户端自报分数不能作为免图片验证的授权依据。
 export function analyzeTrajectory(points, isTouch) {
   if (!Array.isArray(points) || points.length < 5) return 0;
 
@@ -88,7 +90,7 @@ export function analyzeTrajectory(points, isTouch) {
 }
 
 // 图片滑块可以自然地沿直线或短距离移动，不能套用出图前的弯曲度/60px 门槛。
-export function passesChallengeTrajectory(points, isTouch) {
+export function passesChallengeTrajectory(points) {
   if (!Array.isArray(points) || points.length < 3) return false;
   if (points.at(-1).t - points[0].t < 80) return false;
   const segments = points.slice(1).map((point, i) => ({
@@ -98,12 +100,27 @@ export function passesChallengeTrajectory(points, isTouch) {
   if (segments.reduce((sum, segment) => sum + segment.distance, 0) < 1) return false;
   // 同时具有完全固定的采样间隔和速度才拒绝，允许硬件的固定刷新节拍。
   const moving = segments.filter(segment => segment.distance > 0);
-  if (!isTouch && moving.length >= 5) {
+  if (moving.length >= 5) {
     const intervals = moving.map(segment => segment.dt), speeds = moving.map(segment => segment.distance / segment.dt);
     const spread = values => (Math.max(...values) - Math.min(...values)) / (values.reduce((sum, value) => sum + value, 0) / values.length);
     if (spread(intervals) < .01 && spread(speeds) < .01) return false;
   }
   return true;
+}
+
+export function passesKeyboardBehavior(data, angle, elapsedMs, pointerPasses) {
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !Number.isInteger(data.startAngle) || data.startAngle < 0 || data.startAngle > 359) return false;
+  if (data.startAngle !== 0 && !pointerPasses) return false;
+  if (!Array.isArray(data.events) || !data.events.length || data.events.length > 512) return false;
+  let previous = -1, current = data.startAngle;
+  for (const [i, event] of data.events.entries()) {
+    if (!event || !isRotationKey(event.key) || !['range', 'stage'].includes(event.control) ||
+      !Number.isFinite(event.t) || event.t <= previous || event.t < 0 || event.t > elapsedMs + 250) return false;
+    if (event.key === 'Enter' && i !== data.events.length - 1) return false;
+    current = keyboardAngle(current, event.key, event.control);
+    previous = event.t;
+  }
+  return data.events.at(-1).key === 'Enter' && previous >= 80 && Math.abs(((angle % 360) + 360) % 360 - current) < 1e-6;
 }
 
 /**
@@ -115,7 +132,7 @@ export function passesChallengeTrajectory(points, isTouch) {
  *   - 逐字段的按键间隔均值和方差（自然打字 vs 自动填充）
  *   - 多字段独立输入
  *
- * 满分 7 分。通过线同样由 createTurnstile 随机浮动。
+ * 仅供行为分析，不参与令牌签发决策。
  */
 export function analyzeFormBehavior(data) {
   if (!data || typeof data.totalMs !== 'number') return 0;
@@ -149,6 +166,8 @@ export function analyzeFormBehavior(data) {
 function plausibleHints(h) {
   if (h == null) return true;
   if (typeof h !== 'object' || Array.isArray(h)) return false;
+  if (h.pointer !== undefined && !['mouse', 'touch', 'pen', 'keyboard'].includes(h.pointer)) return false;
+  if (h.coarse !== undefined && typeof h.coarse !== 'boolean') return false;
   if (!Number.isFinite(h.dpr) || h.dpr < 0.5 || h.dpr > 4) return false;
   if (!Number.isFinite(h.sw) || !Number.isFinite(h.sh)) return false;
   if (h.sw < 200 || h.sw > 10000 || h.sh < 100 || h.sh > 10000) return false;

@@ -5,6 +5,7 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { fileURLToPath } from 'node:url';
 import { nonceFor, challengeTrajectory } from '../helpers.js';
 import { chromium } from '@playwright/test';
+import { rotateByKeyboard } from '../browser/keyboard-helper.js';
 
 const secret = 'workerd-private-secret-at-least-32-characters';
 let mf;
@@ -97,6 +98,13 @@ test('workerd 持久存储上的每 IP 限流原子执行', async () => {
   assert.equal((await get('/captcha/v1/pow', '192.0.2.9')).status, 200);
 });
 
+test('Workers 按规范化 IPv6 定位同一个 Durable Object，等价地址不能分摊限流', async () => {
+  const variants = ['2001:db8::1', '2001:0DB8:0000:0000:0000:0000:0000:0001'];
+  const responses = await Promise.all(Array.from({ length: 61 }, (_, i) => get('/captcha/v1/pow', variants[i % 2])));
+  assert.equal(responses.filter(response => response.status === 200).length, 60);
+  assert.equal(responses.filter(response => response.status === 429).length, 1);
+});
+
 test('Workers Landing 资源与专用 Demo 核验：来源、用途绑定和一次性消费', async () => {
   for (const path of ['/', '/landing/styles.css', '/landing/app.js', '/landing/favicon.svg']) {
     const response = await get(path); assert.equal(response.status, 200, path);
@@ -136,8 +144,7 @@ test('浏览器从真实 Workers 资源加载 UI，完成图片验证并由业�
     const { challenge } = await response.json();
     const row = (await (await dbFor('127.0.0.1')).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
     const angle = (360 - JSON.parse(row.value).answer) % 360;
-    await page.locator('input[type=range]').evaluate((element, value) => { element.value = String(value); element.dispatchEvent(new Event('input')); }, angle);
-    await page.locator('input[type=range]').press('Enter');
+    await rotateByKeyboard(page.locator('input[type=range]'), angle);
     await page.waitForFunction(() => !!window.token);
     const token = await page.evaluate(() => widget.getToken());
     assert.equal((await (await post('/siteverify', { token, ip: '127.0.0.1', action: 'browser' }, '203.0.113.99', { Authorization: `Bearer ${secret}` })).json()).success, true);
