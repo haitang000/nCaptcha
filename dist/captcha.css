@@ -2,6 +2,7 @@
   --_captcha-bg: var(--captcha-bg, #fff); --_captcha-fg: var(--captcha-fg, #18181b); --_captcha-muted: var(--captcha-muted, #71717a);
   --_captcha-border: var(--captcha-border, #d4d4d8); --_captcha-accent: var(--captcha-accent, #006fee); --_captcha-success: var(--captcha-success, #087f5b);
   --_captcha-danger: var(--captcha-danger, #d12a45); --_captcha-radius: var(--captcha-radius, 14px);
+  --_captcha-button-radius: var(--captcha-button-radius, var(--_captcha-radius)); --_captcha-dialog-radius: var(--captcha-dialog-radius, calc(var(--_captcha-radius) + 2px));
   display: inline-block; max-width: 100%; color-scheme: light;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px;
   color: var(--_captcha-fg); line-height: 1.5; text-align: left;
@@ -14,7 +15,7 @@ button, input { font: inherit; }
 button { border: 1px solid var(--_captcha-border); color: var(--_captcha-fg); background: var(--_captcha-bg); cursor: pointer; }
 button:disabled { opacity: .6; cursor: wait; }
 button:focus-visible, .stage:focus-visible, input:focus-visible { outline: 2px solid var(--_captcha-accent); outline-offset: 3px; }
-.widget { position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%; min-height: 48px; padding: 12px 16px; border-radius: var(--_captcha-radius); text-align: left; user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: border-color 160ms, background 160ms, transform 160ms; }
+.widget { position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%; min-height: 48px; padding: 12px 16px; border-radius: var(--_captcha-button-radius); text-align: left; user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: border-color 160ms, background 160ms, transform 160ms; }
 .widget:hover { border-color: var(--_captcha-muted); transform: translateY(-.5px); }
 .widget:active { transform: scale(.98); }
 .widget.loading { cursor: wait; }
@@ -36,8 +37,8 @@ button:focus-visible, .stage:focus-visible, input:focus-visible { outline: 2px s
 .dots i:nth-child(6) { animation-delay: 500ms; } .dots i:nth-child(7) { animation-delay: 600ms; }
 .dots i:nth-child(8) { animation-delay: 700ms; } .dots i:nth-child(9) { animation-delay: 800ms; }
 .ripple { position: absolute; width: 100px; height: 100px; border-radius: 50%; background: currentColor; pointer-events: none; animation: ripple 550ms ease-out forwards; }
-dialog { color: var(--_captcha-fg); background: var(--_captcha-bg); border: 1px solid var(--_captcha-border); border-radius: calc(var(--_captcha-radius) + 6px); box-shadow: 0 24px 80px #0004; }
-dialog.puzzle { position: fixed; width: min(400px, calc(100vw - 32px)); height: 440px; max-height: calc(100dvh - 32px); margin: auto; padding: 36px clamp(24px, 13vw, 52px) 47px; border: 0; border-radius: calc(var(--_captcha-radius) + 2px); text-align: center; overflow: auto; scrollbar-width: none; transform-origin: center; }
+dialog { color: var(--_captcha-fg); background: var(--_captcha-bg); border: 1px solid var(--_captcha-border); border-radius: var(--_captcha-dialog-radius); box-shadow: 0 24px 80px #0004; }
+dialog.puzzle { position: fixed; width: min(400px, calc(100vw - 32px)); height: 440px; max-height: calc(100dvh - 32px); margin: auto; padding: 36px clamp(24px, 13vw, 52px) 47px; border: 0; text-align: center; overflow: auto; scrollbar-width: none; transform-origin: center; }
 dialog.puzzle::-webkit-scrollbar { display: none; }
 dialog.puzzle[open] { animation: puzzle-enter 240ms cubic-bezier(.23, 1, .32, 1) backwards; }
 dialog::backdrop { background: #0006; backdrop-filter: blur(3px); }

@@ -150,8 +150,14 @@ PoW 默认在挂载时预热；Worker 和主线程回退都复用 SHA-256 单块
 通过容器的 CSS 变量定制外观，例如：
 
 ```css
-#captcha { --captcha-accent: #7c3aed; --captcha-radius: 12px; }
+#captcha {
+  --captcha-accent: #7c3aed;
+  --captcha-button-radius: 8px; /* 验证按钮圆角 */
+  --captcha-dialog-radius: 20px; /* 图片验证弹窗圆角 */
+}
 ```
+
+`--captcha-button-radius` 与 `--captcha-dialog-radius` 可独立设置，默认分别为 `14px` 和 `16px`。仍兼容原有的 `--captcha-radius`：未单独指定按钮或弹窗圆角时，按钮使用该值，弹窗使用该值加 `2px`。
 
 其他变量有 `--captcha-bg`、`--captcha-fg`、`--captcha-muted`、`--captcha-border`、`--captcha-success`、`--captcha-danger`。默认跟随深浅主题与减少动态效果偏好；样式限定在 Shadow DOM 内。
 
