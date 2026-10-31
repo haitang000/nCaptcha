@@ -143,7 +143,7 @@ export function render(container, options = {}) {
       const viewport = dlg.querySelector('.stage-viewport'), stage = dlg.querySelector('.stage'), img = dlg.querySelector('img'), range = dlg.querySelector('.range'), eyebrow = dlg.querySelector('.puzzle-eyebrow'), errEl = dlg.querySelector('.error-text');
       img.src = challenge.image;
       const challengeTracking = createChallengeTracking(dlg);
-      let deg = 0, drag = null, settled = false, submitting = false, keyboardAdjusting = false, rangeCancelled = false;
+      let deg = 0, drag = null, rangeDrag = null, settled = false, submitting = false, keyboardAdjusting = false, rangeCancelled = false;
       const events = new AbortController();
       const listen = (el, type, fn) => el.addEventListener(type, fn, { signal: events.signal });
       const finish = (value, error) => {
@@ -215,16 +215,17 @@ export function render(container, options = {}) {
         }
         if (settled) return;
         challengeTracking.reset();
-        submitting = false; keyboardAdjusting = false; rangeCancelled = false;
+        submitting = false; keyboardAdjusting = false; rangeCancelled = false; rangeDrag = null;
         range.disabled = false; stage.removeAttribute('aria-disabled'); delete stage.dataset.phase;
         dlg.removeAttribute('aria-busy'); eyebrow.textContent = '请进行安全验证';
         range.focus({ preventScroll: true });
       }
       async function submit() {
         if (submitting || settled || signal.aborted) return;
+        submitting = true;
         // 禁用滑块前把焦点留在弹窗内，加载期间仍可用 Escape 取消。
         if (root.activeElement === range) dlg.querySelector('h3').focus({ preventScroll: true });
-        submitting = true; range.disabled = true; errEl.textContent = '';
+        range.disabled = true; errEl.textContent = '';
         const checkingSince = performance.now(), feedbackMs = motion() ? 560 : 300, exitMs = motion() ? 160 : 0;
         dlg.classList.remove('has-error'); dlg.setAttribute('aria-busy', 'true'); stage.setAttribute('aria-disabled', 'true'); stage.dataset.phase = 'loading'; eyebrow.textContent = '正在验证…';
         let result = null, failure = null;
@@ -265,10 +266,27 @@ export function render(container, options = {}) {
         }
       }
       const angleOf = e => { const r = stage.getBoundingClientRect(); return Math.atan2(e.clientY - r.top - r.height / 2, e.clientX - r.left - r.width / 2) * 180 / Math.PI; };
-      listen(range, 'input', () => paint(Number(range.value)));
-      listen(range, 'pointerdown', () => { keyboardAdjusting = false; rangeCancelled = false; });
-      listen(range, 'pointercancel', () => { rangeCancelled = true; });
-      listen(range, 'change', () => { if (!keyboardAdjusting && !rangeCancelled) void submit(); });
+      listen(range, 'input', () => {
+        if (rangeDrag && Number(range.value) !== rangeDrag.startAngle) rangeDrag.changed = true;
+        paint(Number(range.value));
+      });
+      listen(range, 'pointerdown', e => {
+        if (e.button !== 0 || submitting || settled || rangeDrag) return;
+        keyboardAdjusting = false; rangeCancelled = false;
+        rangeDrag = { pointer: e.pointerId, startAngle: Number(range.value), changed: false };
+        range.setPointerCapture(e.pointerId);
+      });
+      listen(range, 'pointerup', e => {
+        if (!rangeDrag || e.pointerId !== rangeDrag.pointer) return;
+        const changed = rangeDrag.changed; rangeDrag = null;
+        if (changed) void submit();
+      });
+      for (const event of ['pointercancel', 'lostpointercapture']) listen(range, event, e => {
+        if (!rangeDrag || e.pointerId !== rangeDrag.pointer) return;
+        rangeDrag = null; rangeCancelled = true;
+      });
+      // change 表示控件提交了值，不保证指针已经松开；拖动只由对应的 pointerup 提交。
+      listen(range, 'change', () => { if (!rangeDrag && !keyboardAdjusting && !rangeCancelled) void submit(); });
       function keydown(e, control) {
         if (!isRotationKey(e.key) || submitting || settled) return;
         e.preventDefault(); keyboardAdjusting = true;
