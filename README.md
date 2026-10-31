@@ -1,287 +1,169 @@
-# CAPTCHA
+# nCaptcha
 
-现已支持 **Cloudflare Workers**：使用 SQLite Durable Objects 保存验证状态，浏览器接入协议保持一致。见 [Workers 本地运行与部署说明](docs/WORKERS.md)。
+**nCaptcha** 是一个可自托管、零运行时依赖的人机验证码系统：结合 **前端自适应 SHA-256 工作量证明（PoW）**、**高质感图片回正** 与 **微观轨迹行为动力学分析**。原生支持 Node.js (≥22.5) 与 Cloudflare Workers（SQLite Durable Objects），客户端构建产物仅 4 个极小静态文件。
 
-已发布的服务地址与接入配置见 [当前部署](docs/DEPLOYED.md)。
+---
 
-从 localhosting 提取的可嵌入验证码：行为评分、SHA-256 工作量证明（PoW）、图片回正和一次性令牌。提供后端库、原生浏览器组件以及独立 HTTP 服务；无需数据库、外部验证码服务或运行时第三方依赖。
+## ⚡ 核心特性
 
-需要 **Node.js ≥22.5**。浏览器支持现代 Chrome、Edge、Firefox、Safari（需要 Shadow DOM、`dialog` 和 Pointer Events）。已自动验证 Chromium 桌面和移动触屏模式。包为 JavaScript ESM，并附带 TypeScript 声明。
+- **多重防御体系**：前端自适应 PoW 难度门槛 + 像素级防侧信道题图回正 + 轨迹行为动力学检验（检测机械恒速、异常停顿与重放）。
+- **一次性强绑定令牌**：Token 强绑定真实 IP 与 Action，限制最短求解耗时，必须由业务后端 `/siteverify` 消费。
+- **现代化组件**：Shadow DOM 隔离，圆形预览、胶囊滑块、自适应深浅色模式，完整支持触控、鼠标与全键盘操作。
+- **双端运行环境**：支持 Node.js（原生 HTTP / Express 快速嵌入）与 Cloudflare Workers（边缘 SQLite 强一致状态）。
 
-## 构建与运行
+---
 
-在 PowerShell 中：
+## 🚀 快速开始
+
+### 方式 1：让 AI Agent 协助部署与接入（推荐）
+
+如果你正在使用 Cursor、Claude Code、Copilot 或 Antigravity 等 AI 编程助手，可直接复制以下提示词发送给 Agent，让其自动分析当前项目并完成端到端接入：
+
+> **📋 复制发给 AI Agent 的 Prompt：**
+>
+> ```markdown
+> 你是一名资深安全与全栈工程师。请帮我在当前项目中集成 nCaptcha 人机验证码。该项目尚未发布到 npm 公共仓库，请按以下步骤执行：
+>
+> 1. **获取源码与构建**：
+>    - 在项目中克隆仓库：`git clone https://github.com/haitang000/nCaptcha.git`
+>    - 进入目录并完成构建：`cd nCaptcha && npm ci && npm run build`（构建出前端所需的 `dist/` 资源）
+> 2. **接入方式选型**：
+>    - **Node.js 内嵌模式**：在主项目中执行 `npm install ./nCaptcha` 本地安装依赖，使用 `createExpressMiddleware` 或原生 HTTP 中间件挂载 `/captcha` 路由与静态资源；
+>    - **独立微服务/边缘模式**：在 `nCaptcha` 目录下配置 `.env`（设置 `CAPTCHA_SECRET` 与前端来源白名单 `CAPTCHA_ALLOWED_ORIGINS`）并执行 `npm start` 启动独立服务，或执行 `npm run workers:deploy` 部署到 Cloudflare Workers。
+> 3. **前端挂载**：在目标业务表单（如登录、注册或高频接口）中引入组件并挂载到容器中；表单提交时调用 `const token = await captcha.verify()` 并在请求中携带 `captcha_token`，在 `finally` 块中调用 `captcha.reset()`。
+> 4. **后端核验**：在业务接口中提取真实客户端 IP，通过内部 `captcha.consumeToken({ token, ip, action })` 或向独立服务发起 `POST /captcha/v1/siteverify` 请求（携带 Bearer 密钥）核验并原子消费 Token。严格校验返回结果，未通过则阻断业务执行。
+> 5. **联调验证**：端到端提交一次表单，确认人机交互正常且 Token 仅能单次消费、不可重放。
+> ```
+
+### 方式 2：手动运行独立微服务（Node.js ≥ 22.5）
 
 ```powershell
-cd F:\code\CAPTCHA
 npm ci
 npm run build
-Copy-Item .env.example .env
-# 在 .env 中填写 CAPTCHA_SECRET 和实际业务页面的 CAPTCHA_ALLOWED_ORIGINS。
-npm start
+Copy-Item .env.example .env   # 填入 CAPTCHA_SECRET 与 CAPTCHA_ALLOWED_ORIGINS
+npm start                     # 启动服务，默认监听 http://127.0.0.1:8787
 ```
 
-服务仅提供验证码 API、可嵌入组件资源和 [健康检查](http://127.0.0.1:8787/health)。根路径 `/` 返回 404；将组件挂载到自己的业务页面，再由业务后端通过受密钥保护的 `/siteverify` 核验令牌。构建输出 `dist/` 仅包含四个客户端资源，接入代码见下文。
-
-`dist/` 为自动生成目录，不纳入 Git。拉取源码后，启动 Node 服务或运行测试前先执行 `npm run build`；Workers 命令和 `npm pack` 会自动构建所需资源，分发包仍包含 `dist/`。
-
-## 在 Node.js 服务内嵌入
-
-开发时可从其他项目安装本目录，或安装打包文件：
+### 方式 3：手动部署到 Cloudflare Workers
 
 ```powershell
-npm install F:\code\CAPTCHA
-# 可选：在本项目运行 npm pack，再安装生成的 portable-captcha-0.2.0.tgz
+npx wrangler secret put CAPTCHA_SECRET
+npm run workers:deploy
 ```
 
-以下是一个最小原生 HTTP 接入示例。业务接口需要核验令牌，不能只依赖浏览器成功回调。
+---
 
-```js
-import http from 'node:http';
-import { createCaptcha } from 'portable-captcha';
-import { createHttpHandler, getClientIp, readJson, sendJson } from 'portable-captcha/http';
+## 💻 接入示例
 
-const captcha = createCaptcha({ mode: 'strict' });
-const handleCaptcha = createHttpHandler(captcha, {
-  allowedOrigins: ['https://your-service.example'],
-});
-
-const server = http.createServer(async (req, res) => {
-  try {
-    if (await handleCaptcha(req, res)) return;
-    if (req.url === '/submit' && req.method === 'POST') {
-      const body = await readJson(req);
-      const success = await captcha.consumeToken({
-        token: body.captcha_token, ip: getClientIp(req), action: 'register',
-      });
-      if (!success) return sendJson(res, 400, { error: '请重新验证' });
-      // 执行实际业务；令牌从这里开始已经被消费。
-      return sendJson(res, 200, { success: true });
-    }
-    sendJson(res, 404, { error: '未找到' });
-  } catch (error) {
-    sendJson(res, error.status ?? 500, { error: error.message });
-  }
-});
-server.on('close', () => { void captcha.close(); });
-server.listen(8080);
-```
-
-业务表单的来源校验、会话和业务限流仍由宿主管理。若存在反向代理，签发和核验令牌应使用**同一套真实 IP 提取规则**。IPv6 的等价压缩/展开写法、大小写及 IPv4 映射地址会统一规范化，共享限流、失败声誉和令牌绑定。全局地址中无意义的作用域后缀会移除，链路本地地址的有效接口作用域仍保留，以免扩大可信代理范围。
-
-Express 无需额外安装适配器包：
-
-```js
-import { createExpressMiddleware } from 'portable-captcha/http';
-app.use(express.json({ limit: '64kb' }));
-app.use(createExpressMiddleware(captcha, {
-  allowedOrigins: ['https://your-service.example'],
-}));
-```
-
-推荐将中间件挂到应用根路径。也可 `app.use('/security', middleware)`，此时 `basePath`、`assetPath` 按 Express 剥离挂载前缀后的路径配置，例如保留 `/captcha/v1`；浏览器使用 `/security/captcha/v1` 与 `/security/captcha/assets/`。
-
-## 在浏览器中嵌入
-
-由 HTTP 处理器提供四个静态文件，默认位于 `/captcha/assets/`。亦可复制 `dist` 的全部四个文件到自己的静态目录。
-
-普通 script：
+### 1. 前端接入 (浏览器)
 
 ```html
-<form id="signup">
-  <input name="username" autocomplete="username">
+<form id="login-form">
+  <input name="username" placeholder="用户名" required />
   <div id="captcha"></div>
-  <button type="submit">注册</button>
+  <button type="submit">登录</button>
 </form>
+
 <script src="/captcha/assets/captcha.js"></script>
+<!-- 或 ESM: import { render } from '/captcha/assets/captcha.esm.js'; -->
 <script>
-  const form = document.querySelector('#signup');
   const captcha = Captcha.render('#captcha', {
     apiUrl: '/captcha/v1',
-    action: 'register',
-    form,
-    onExpire() { console.log('需要重新验证'); },
+    action: 'login'
   });
-  form.addEventListener('submit', async event => {
-    event.preventDefault();
+
+  document.querySelector('#login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
     try {
       const token = await captcha.verify();
       if (!token) return; // 用户取消
-      const data = Object.fromEntries(new FormData(form));
-      data.captcha_token = token;
-      const response = await fetch('/submit', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+
+      await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ captcha_token: token })
       });
-      if (!response.ok) throw new Error('提交失败，请重试');
-    } catch (error) {
-      if (error.name !== 'AbortError') console.error(error.message);
     } finally {
-      captcha.reset(); // 后端消费后必须重新验证，下次业务请求不能复用令牌
+      captcha.reset(); // 消费后重置
     }
   });
 </script>
 ```
 
-ES module 与打包器接入：
+> **常用方法**：`verify()`（触发验证并拉取弹窗）、`getToken()`（获取有效令牌）、`reset()`（重置）、`destroy()`（销毁）。  
+> **样式定制**：可在容器上覆盖 CSS 变量，如 `--captcha-accent`、`--captcha-button-radius`、`--captcha-dialog-radius` 等。
 
-```js
-import { render } from 'portable-captcha/client';
-// 或浏览器中 import { render } from '/captcha/assets/captcha.esm.js';
-const widget = render(element, {
-  apiUrl: '/captcha/v1',
-  assetBaseUrl: '/captcha/assets/',
-  action: 'login',
-});
-// 页面卸载、路由切换或框架组件 unmount 时：
-widget.destroy();
-```
+---
 
-方法：`verify(): Promise<string | null>`、`getToken(): string | null`、`reset(): void`、`destroy(): void`。同一实例的并发 `verify()` 合并为同一任务；`reset/destroy` 使进行中的任务以 `AbortError` 拒绝。销毁可重复调用，销毁后 `verify()` 返回 `DESTROYED` 错误。
+### 2. 业务后端接入（核验并消费 Token）
 
-选项：`apiUrl`、`action`（默认 `default`）、`form`（表单元素或选择器）、`assetBaseUrl`、`workerUrl`、`prewarm`（默认 `true`）、`requestTimeoutMs`（默认 `15000`）、自定义 `fetch`。回调为 `onSuccess(token)`、`onError(error)`、`onExpire()`、`onStateChange(state)`。状态为 `idle/loading/verified/error/destroyed`。组件等待服务端规定的最短令牌使用时间后才触发成功。
-
-`requestTimeoutMs` 须为 1–2147483647 的整数，限制每次 API 请求及响应体读取的总耗时，不限制本地 PoW 计算或用户操作时间。超时返回 `CaptchaClientError`，`code` 为 `REQUEST_TIMEOUT`，可再次调用 `verify()` 重试；`reset/destroy` 仍以 `AbortError` 取消。自定义 `fetch` 即使忽略取消，迟到响应也不会恢复旧任务或触发成功。取消后的挑战释放使用独立的 3 秒限制。核验请求超时后不假定旧挑战或令牌仍可使用。
-
-图片方向验证失败时，组件会保留当前弹窗，释放旧挑战并自动获取新题；旧图片向左移出，新图片从右侧向左进入，滑块归零后开始下一轮。整个过程沿用同一次 `verify()` 调用，直到通过、取消或出现无法继续的错误。通过或取消时，弹窗与遮罩完成退出动画后再关闭；系统开启“减少动态效果”时跳过位移动画。
-
-PoW 默认在挂载时预热；Worker 和主线程回退都复用 SHA-256 单块缓冲区，避免每次尝试重复编码、分配和转换十六进制字符串。题图生成复用每题的 gamma 查表与列插值参数，按行复制裁剪数据，旋转时跳过最终圆形外的像素，并采用 PNG level 3 无损压缩。客户端 JS/CSS 构建启用压缩。优化不降低 PoW 难度、不缩短安全等待或动效时间；验证耗时仍取决于设备算力、网络和配置。
-
-组件的 CSS、Worker 与弹窗分别归实例管理。默认从组件脚本所在目录加载 CSS 和 Worker；打包器项目应明确设置 `assetBaseUrl`，并将四个构建文件复制到该目录。跨域加载 Worker 可能受浏览器策略限制，组件会回退到分块计算；将 Worker 放在业务页面同源目录可启用后台计算。严格 CSP 需要允许相应脚本、样式、图片 `data:`、API 连接与 Worker 来源；Worker 加载失败仍可回退。
-
-通过容器的 CSS 变量定制外观，例如：
-
-```css
-#captcha {
-  --captcha-accent: #7c3aed;
-  --captcha-button-radius: 8px; /* 验证按钮圆角 */
-  --captcha-dialog-radius: 20px; /* 图片验证弹窗圆角 */
-}
-```
-
-`--captcha-button-radius` 与 `--captcha-dialog-radius` 可独立设置，默认分别为 `14px` 和 `16px`。仍兼容原有的 `--captcha-radius`：未单独指定按钮或弹窗圆角时，按钮使用该值，弹窗使用该值加 `2px`。
-
-其他变量有 `--captcha-bg`、`--captcha-fg`、`--captcha-muted`、`--captcha-border`、`--captcha-success`、`--captcha-danger`。默认跟随深浅主题与减少动态效果偏好；样式限定在 Shadow DOM 内。
-
-图片回正弹窗采用圆形预览与胶囊滑块，松开滑块自动验证。鼠标和触屏均可拖动；键盘可用方向键微调后按 Enter 确认，Escape 或点击弹窗外可取消。图片拖动操作仍保留。`--captcha-track` 可自定义滑轨背景色。
-
-图片验证期间会独立采集本轮弹窗内的鼠标、触屏或笔轨迹，提交答案时由服务端同时检查轨迹与角度。缺失轨迹、静止点、过短操作和机械匀速等间隔轨迹会被拒绝；支持正常的直线滑动及短距离微调。轨迹最多提交 100 个点，换题时清空，取消、重置或销毁时移除监听。键盘操作提交 `pointer: 'keyboard'` 与按键记录，服务端重放按键后核对最终角度；仅改变输入方式字段不能跳过行为校验。指针与键盘混合操作会保留并检查已有指针轨迹。
-
-启用验证码时始终要求完成 PoW 与图片挑战。原 `normal` 模式作为兼容名称保留，已取消根据客户端填写统计或轨迹评分直接签发令牌的路径。题图下发前会清除圆形显示区域外的全部 RGBA 数据，避免原始方形画布的透明边角泄露旋转信息。行为记录仍可由客户端伪造，不能代替图片答案、服务端等待时间与一次性令牌校验。
-
-## 独立服务：其他语言也能接入
-
-```powershell
-Copy-Item .env.example .env
-# 在 .env 填写 CAPTCHA_SECRET，例如用下面命令生成后复制进去：
-node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-npm start
-```
-
-在业务页面中按上面的浏览器接入方式配置独立服务的 `apiUrl` 和 `assetBaseUrl`，并将业务 origin 加入 `CAPTCHA_ALLOWED_ORIGINS`。业务后端通过 `/siteverify` 核验；`CAPTCHA_SECRET` 只保存在后端。
-
-一个服务实例对应一个业务。默认绑定 `127.0.0.1:8787`，健康检查为 `GET /health`。`.env` 仅在入口执行时读取；导入核心库或服务模块不会读环境、启动服务或定时任务。退出服务会释放其内存存储。
-
-浏览器完成验证后，把 token 提交给自己的业务后端。业务后端发送：
+#### 通用 HTTP 接口（支持 Python / Go / Java / PHP 等任意语言）
 
 ```http
 POST /captcha/v1/siteverify
-Authorization: Bearer <CAPTCHA_SECRET>
+Authorization: Bearer <YOUR_CAPTCHA_SECRET>
 Content-Type: application/json
 
-{"token":"<浏览器提交的令牌>","ip":"<真实客户端IP>","action":"register"}
+{"token": "<前端提交的token>", "ip": "<用户真实IP>", "action": "login"}
+```
+响应：`{"success": true|false}`
+
+#### Node.js 内嵌 (Express / 原生 HTTP)
+
+```javascript
+import { createCaptcha } from 'portable-captcha';
+import { createExpressMiddleware, getClientIp } from 'portable-captcha/http';
+
+const captcha = createCaptcha({ mode: 'strict' });
+
+// 挂载中间件提供静态资源与 API
+app.use(createExpressMiddleware(captcha, { allowedOrigins: ['https://your-site.example'] }));
+
+// 业务接口内部消费 Token（无需 HTTP 请求与密钥）
+app.post('/api/login', async (req, res) => {
+  const ok = await captcha.consumeToken({
+    token: req.body.captcha_token,
+    ip: getClientIp(req),
+    action: 'login'
+  });
+  if (!ok) return res.status(400).json({ error: '验证码无效或已过期' });
+  // 执行登录逻辑...
+});
 ```
 
-合法核验请求返回 `200 {"success":true|false}`。核验成功即消费令牌；网络超时后不能假定令牌仍有效，业务端应让用户重新验证。密钥错误返回 401。带 Origin 的请求及该端点的 CORS 预检会被拒绝，浏览器不应直接调用此接口。
+---
 
-默认接口如下。所有 JSON 请求体上限为 64KiB；错误统一返回 `{ error, code, ...details }`。
+## 📡 API 与核心配置
 
-| 方法与路径 | 请求 | 成功返回 |
-| --- | --- | --- |
-| GET `/pow?action=register` | 用途查询参数 | `{ prefix, bits, expiresInMs }` |
-| POST `/verify` | `{ action, pow:{prefix,nonce}, trajectory?, formBehavior?, hints? }` | 令牌结果或 `{ challenge:{id,image,expiresInMs} }` |
-| POST `/challenge` | `{ action, id, angle, pointer?, trajectory?, keyboard?, hints? }` | `{ token, expiresInMs, usableAfterMs }` |
-| POST `/cancel` | `{ action, id }` | `{ cancelled:boolean }` |
-| POST `/siteverify` | 服务端密钥和 `{ token, ip, action }` | `{ success:boolean }` |
+### API 接口
 
-浏览器接口的 IP 只由连接地址/可信代理解析，忽略请求体中的 `ip`。角度为客户端 CSS 顺时针旋转量，整数或有限小数均可；图片已顺时针旋转，所以正确提交值对应服务端角度的负值。失败后 `ANGLE_INCORRECT` 可继续微调；`CHALLENGE_EXHAUSTED/CHALLENGE_EXPIRED` 必须重新验证。
+| 路径 | 访问权限 | 说明 |
+| :--- | :--- | :--- |
+| `GET /captcha/v1/pow?action=...` | 公开 | 获取 PoW 题目 |
+| `POST /captcha/v1/verify` | 公开 | 提交 PoW，换取图片挑战 |
+| `POST /captcha/v1/challenge` | 公开 | 提交回正角度与交互轨迹 |
+| `POST /captcha/v1/cancel` | 公开 | 取消并释放题目 |
+| `POST /captcha/v1/siteverify` | **Bearer 密钥** | **后端核验并消费 Token** |
+| `GET /health` | 公开 | 服务健康检查 |
 
-`/challenge` 的 `trajectory` 为本轮图片验证的 `{x,y,t}[]`，`t` 从 0 开始且严格递增，至少需要 3 个点并覆盖 80ms，不能超过服务端记录的挑战已用时间（允许 250ms 时钟误差）。鼠标、触屏、笔使用相同的轨迹规则和服务端配置的角度容差。缺失或低质量轨迹同样消耗本题尝试次数并计入失败声誉；浏览器组件收到 `BEHAVIOR_REJECTED` 会在当前弹窗中自动换题。
+### 核心参数 (`createCaptcha` / 环境变量)
 
-键盘客户端须提交 `keyboard: { startAngle, events: [{ key, control, t }] }`。`startAngle` 为开始键盘操作时的整数角度，纯键盘从 0 开始；非零起点还需提供通过检查的指针轨迹。`control` 为 `range` 或 `stage`；方向键分别调整 1° 或 15°，PageUp/Down 为对应步长的 10 倍，Home/End 为 0°/359°。滑块在边界处截断，图片区域循环旋转。最多 512 条记录，`t` 为本轮交互开始后的毫秒数，严格递增，末条必须是 Enter，至少经过 80ms，并与服务端时间和提交角度相符。自定义客户端需同步更新；仅提交 `pointer: 'keyboard'` 会返回 `BEHAVIOR_REJECTED`。
+| 参数 | 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `mode` | `CAPTCHA_MODE` | `'strict'` | 运行模式（`strict` 强制图片挑战） |
+| `powBits` | `CAPTCHA_POW_BITS` | `20` | PoW 基础难度 (0~28)，频繁失败动态累加 |
+| `tolerance` | `CAPTCHA_TOLERANCE` | `10` | 回正角度容差 (±10°) |
+| `minSolveMs` | `CAPTCHA_MIN_SOLVE_MS` | `1000` | 最短求解耗时 (ms)，防脚本瞬发 |
+| `tokenTtlMs` | `CAPTCHA_TOKEN_TTL_MS` | `300000` | 令牌有效期 (5 分钟) |
+| `rateLimit` | `CAPTCHA_RATE_LIMIT` | `60` / 10m | 单 IP 请求频次上限 |
 
-`CAPTCHA_ALLOWED_ORIGINS` 配置精确来源白名单（含协议和非默认端口，无末尾斜杠），多个来源用逗号分隔。浏览器同源 POST 也可能带 Origin，需将业务自身 origin 列入。未携带 Origin 的服务端请求仍可访问公开挑战接口；来源白名单不是身份认证。
+---
 
-`CAPTCHA_TRUSTED_PROXIES` 为紧邻服务的可信代理 IP 列表，默认空且忽略 `X-Forwarded-For`。第一版支持单层代理，采用该代理追加的最右侧 IP；多层代理请在网关先规范化为一个真实客户端地址。业务核验侧应使用一致规则。宿主路由原有 CSRF、账号限流与会话管理应自行保留。
-
-## 核心配置与存储扩展
-
-`createCaptcha(options)` 返回 `createPow`、`verifyBehavior`、`solveChallenge`、`cancelChallenge`、`consumeToken` 五个异步方法及 `setMode('normal'|'strict')`、`close()`。各验证方法接收包含 `{ip,action?}` 的对象，额外字段见类型声明。库核验直接调用 `consumeToken()`，不需要 HTTP 密钥。
-
-| 配置 | 默认值 | 含义 |
-| --- | --- | --- |
-| `enabled` / `mode` | `true` / `strict` | 启用时始终要求图片挑战；`normal` 为已弃用的兼容别名，行为评分不能直接放行；显式关闭后直接签发令牌 |
-| `powBits` | 20 | 基础难度，允许 0–28；最近失败多时最多增加 4 位，总计不超过 28 |
-| `tolerance` | 10 | 所有输入方式共用的回正容差，不根据客户端自报设备类型放宽 |
-| `minSolveMs` / `minTokenAgeMs` | 1000 / 300 | 最低求解和令牌使用间隔 |
-| `powTtlMs` | 120000 | PoW 有效期 |
-| `tokenTtlMs` / `challengeTtlMs` | 300000 / 300000 | 令牌/图片挑战有效期 |
-| `maxChallengesPerIp` / `challengeTries` | 3 / 3 | 并发未解题目上限及每题尝试次数 |
-| `rateLimit` / `rateWindowMs` | 60 / 600000 | 所有公开验证码操作共用每 IP 滑动窗口 |
-| `imagesDir` | 内置 10 张题图 | 自备 PNG 目录；无可用题图时启动报错 |
-| `store` / `namespace` | 自有内存 / 随机实例命名空间 | 外部状态接口与键前缀 |
-| `now` | `Date.now` | 可注入时钟，便于模拟过期 |
-
-图片答案提交早于 `minSolveMs` 时仍返回 `TOO_FAST` 并受请求限流，但不扣减尝试次数、不增加失败声誉。组件自动等待剩余时间后重试；错误答案与异常轨迹仍会计罚。
-
-内存存储默认最多 10000 个键，满时返回 503，过期项定期清理。每个自有存储的清理定时器均调用 `unref()`，`close()` 会释放。重启后未解挑战和令牌失效。注入的外部存储由调用方负责关闭。
-
-扩展存储需实现异步 `get/set/delete/update`。**`update(key, updater)` 必须原子执行同一键的读取、同步回调和状态写回**，过期记录视为不存在，参数和返回值需与内部状态隔离。回调返回 `{ value, ttlMs, result }`；省略 `value` 表示删除，`result` 作为方法结果。不要用非原子的远程 `get` 再 `set` 实现它。Node 默认提供单进程内存实现，Workers 另提供 SQLite Durable Objects 实现，未提供 Redis 适配器。未来使用共享存储时，各副本需显式使用相同 `namespace`。
-
-行为信号可由客户端伪造，评分只是启发式判断。图片扰动也不保证无法识别；内置题图主要用于示例，部署时可换成方向明确的私有题库。目前保留 2 张方向明确的原图，新增 8 张生成题图，移除了云海和大面积天空的麦田小路图；题图筛选标准、来源与生成提示词见 [题图库说明](assets/puzzles/README.md)。轨迹只保留有限点数，表单仅采集时间统计和字段顺序，不采集输入内容或画布指纹；所有状态按有效期清理。
-
-## 验证与打包
-
-新增多维行为评测接口 `assessChallengeBehavior(input, { elapsedMs })`，返回 `passed`、`reasons` 和各维度的 `status/metrics`。服务端图片求解使用同一评估逻辑；详细报告仅供后端或离线分析，公开验证码接口仍返回原有结果和错误码。
-
-| 维度 | 指标或检查 |
-| --- | --- |
-| 数据完整性 `integrity` | 数值、点数、设备提示与表单数据格式 |
-| 时间一致性 `timing` | 轨迹零基点、操作时长、服务端已用时间与 250ms 容差 |
-| 路径 `motion` | 路程、位移、直线程度、方向修正、静止与短操作 |
-| 运动变化 `dynamics` | 速度波动、加速度波动、末端减速、机械匀速与抖动采样下的严格恒速 |
-| 操作节律 `rhythm` | 采样间隔波动、停顿、重复局部节律 |
-| 键盘 `keyboard` | 按键重放、最终角度、方向修正、指针混合输入 |
-| 环境 `environment` | 设备提示与输入方式一致性；缺失信息保持中性 |
-| 表单 `form` | 输入次数、输入间隔、节拍波动、实际焦点往返与填写耗时 |
-
-`status` 为 `pass/fail/info/unavailable`；`info` 仅观察，`unavailable` 表示无该项数据。环境差异、自动填充、直线滑动、停顿和重复节律不会单独导致拒绝。表单只采集时间与匿名字段序号，焦点记录最多保留 32 条，不采集输入内容。短距离或少点数操作不适用新增的长直线严格恒速检查。
-
-```js
-import { assessChallengeBehavior } from 'portable-captcha';
-
-const assessment = assessChallengeBehavior({
-  angle: 9,
-  trajectory: [{ x: 0, y: 0, t: 0 }, { x: 1, y: 0, t: 45 }, { x: 2, y: 0, t: 130 }],
-}, { elapsedMs: 1500 }); // 线上必须使用服务端记录的挑战已用时间
-console.log(assessment.passed, assessment.dimensions.dynamics.metrics);
-```
-
-运行 `npm run test:assessment` 生成 [Markdown 评测报告](test-results/assessment/report.md) 和 [JSON 明细](test-results/assessment/report.json)，也可加 `-- --output-dir <目录>` 自定义输出位置。内置 26 个合成场景，覆盖鼠标、触屏、笔、短距离微调、固定刷新率、越过目标后回调、停顿、纯键盘、混合输入、自动填充、异常时间、机械轨迹和已知可伪造样本；报告包含逐维结果、场景结果和本机评估函数的 P50/P95 耗时。回归预期不匹配时命令返回非零退出码。
-
-这些合成样本用于检查兼容性和回归，不能据此推算真实用户误拒率或完整验证码的攻破率。脚本重放自然轨迹仍可能通过行为检查；`passed` 不是“真人概率”，不能单独授权。PoW、图片答案、服务端等待、限流与一次性令牌检查仍须全部通过。离线省略 `elapsedMs` 时，报告会标明未核对服务端时间。
+## 🧪 常用开发命令
 
 ```powershell
-npm run build
-npm test
-npm run test:assessment
-npm run test:types
-npx playwright install chromium
-npm run test:browser
-npm run test:package
-npm pack
+npm run build            # 构建客户端资源 (dist/)
+npm test                 # 运行全部核心测试 (107 项通过)
+npm run test:assessment  # 运行多维行为动力学评测
+npm run test:browser     # 运行 Playwright 浏览器端到端测试
 ```
-
-后端测试覆盖 PoW、伪造行为/设备标记、键盘重放、图片透明边界侧信道、统一容差、IPv6 等价地址、TTL、并发消费、限流、跨域和适配器。浏览器测试覆盖两个组件、取消/重试、销毁、过期、Worker 回退、键盘与移动操作，以及普通 script、ES module 和跨域接入的真实业务提交。浏览器测试使用单独的测试服务和低难度参数，最小表单及模拟业务后端位于 `test/fixtures/`，均不进入分发包。
-
-`test:package` 构建并打包后，在 `.package-check` 中安装生成的 tgz，以安装后的路径验证库导出、图片、静态资源及业务令牌消费。发布包不需要运行时依赖。尚未发布到 npm，`private: true` 防止意外发布；没有擅自为提取代码或题图指定新的开源许可。
