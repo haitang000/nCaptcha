@@ -37,8 +37,10 @@ button:focus-visible, .stage:focus-visible, input:focus-visible { outline: 2px s
 .dots i:nth-child(8) { animation-delay: 700ms; } .dots i:nth-child(9) { animation-delay: 800ms; }
 .ripple { position: absolute; width: 100px; height: 100px; border-radius: 50%; background: currentColor; pointer-events: none; animation: ripple 550ms ease-out forwards; }
 dialog { color: var(--_captcha-fg); background: var(--_captcha-bg); border: 1px solid var(--_captcha-border); border-radius: calc(var(--_captcha-radius) + 6px); box-shadow: 0 24px 80px #0004; }
-dialog.puzzle { position: fixed; width: min(400px, calc(100vw - 32px)); height: 440px; max-height: calc(100dvh - 32px); margin: auto; padding: 36px clamp(24px, 13vw, 52px) 47px; border: 0; border-radius: calc(var(--_captcha-radius) + 2px); text-align: center; overflow: auto; animation: enter 180ms cubic-bezier(.23, 1, .32, 1); }
+dialog.puzzle { position: fixed; width: min(400px, calc(100vw - 32px)); height: 440px; max-height: calc(100dvh - 32px); margin: auto; padding: 36px clamp(24px, 13vw, 52px) 47px; border: 0; border-radius: calc(var(--_captcha-radius) + 2px); text-align: center; overflow: auto; transform-origin: center; }
+dialog.puzzle[open] { animation: puzzle-enter 240ms cubic-bezier(.23, 1, .32, 1) backwards; }
 dialog::backdrop { background: #0006; backdrop-filter: blur(3px); }
+dialog.puzzle[open]::backdrop { animation: backdrop-enter 180ms cubic-bezier(.23, 1, .32, 1) backwards; }
 .puzzle-eyebrow { margin: 0; color: #bcbcc0; font-size: 16px; font-weight: 600; line-height: 22px; }
 .puzzle h3 { margin: 0; font-size: clamp(19px, 5.8vw, 24px); font-weight: 300; line-height: 34px; letter-spacing: 0; white-space: nowrap; outline: none; }
 .puzzle h3 strong { font-weight: 750; }
@@ -63,10 +65,11 @@ dialog::backdrop { background: #0006; backdrop-filter: blur(3px); }
 @media (prefers-color-scheme: dark) { .range { background: var(--captcha-track, #2b2b30); box-shadow: inset 0 0 0 1.5px #46464e, inset 0 1px 4px #0001; } }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
-@keyframes enter { from { opacity: 0; transform: scale(.96); filter: blur(3px); } to { opacity: 1; transform: scale(1); filter: none; } }
+@keyframes puzzle-enter { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ripple { from { transform: translate(-50%, -50%) scale(0); opacity: .15; } to { transform: translate(-50%, -50%) scale(5); opacity: 0; } }
 @keyframes pop { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.03); } }
 @keyframes shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-3px); } 40%, 80% { transform: translateX(3px); } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition: none !important; } .widget:hover, .widget:active { transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition: none !important; } dialog.puzzle[open], dialog.puzzle[open]::backdrop { animation: none !important; } .widget:hover, .widget:active { transform: none; } }
 @media (prefers-reduced-transparency: reduce) { dialog::backdrop { backdrop-filter: none; } }
 @media (prefers-contrast: more) { .widget, dialog { border-width: 2px; } }
