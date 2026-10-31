@@ -23,6 +23,8 @@ npm start
 
 服务仅提供验证码 API、可嵌入组件资源和 [健康检查](http://127.0.0.1:8787/health)。根路径 `/` 返回 404；将组件挂载到自己的业务页面，再由业务后端通过受密钥保护的 `/siteverify` 核验令牌。构建输出 `dist/` 仅包含四个客户端资源，接入代码见下文。
 
+`dist/` 为自动生成目录，不纳入 Git。拉取源码后，启动 Node 服务或运行测试前先执行 `npm run build`；Workers 命令和 `npm pack` 会自动构建所需资源，分发包仍包含 `dist/`。
+
 ## 在 Node.js 服务内嵌入
 
 开发时可从其他项目安装本目录，或安装打包文件：
@@ -270,6 +272,7 @@ console.log(assessment.passed, assessment.dimensions.dynamics.metrics);
 这些合成样本用于检查兼容性和回归，不能据此推算真实用户误拒率或完整验证码的攻破率。脚本重放自然轨迹仍可能通过行为检查；`passed` 不是“真人概率”，不能单独授权。PoW、图片答案、服务端等待、限流与一次性令牌检查仍须全部通过。离线省略 `elapsedMs` 时，报告会标明未核对服务端时间。
 
 ```powershell
+npm run build
 npm test
 npm run test:assessment
 npm run test:types
