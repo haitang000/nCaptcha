@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 const root = new URL('../', import.meta.url);
-const common = { absWorkingDir: fileURLToPath(root), bundle: true, target: ['es2022'], minify: false, legalComments: 'none' };
+const common = { absWorkingDir: fileURLToPath(root), bundle: true, target: ['es2022'], minify: false, legalComments: 'none', loader: { '.svg': 'dataurl' } };
 await fs.mkdir(new URL('dist/', root), { recursive: true });
 await build({ ...common, entryPoints: ['src/client/index.js'], format: 'esm', outfile: 'dist/captcha.esm.js' });
 await build({ ...common, entryPoints: ['src/client/index.js'], format: 'iife', globalName: 'Captcha', define: { 'import.meta.url': 'document.currentScript.src' }, outfile: 'dist/captcha.js' });

@@ -143,9 +143,10 @@ test('参考图卡片比例、六点滑块和纯图片圆形预览', async ({ pa
   const dialog = page.locator('dialog[open]');
   await expect(dialog.getByRole('heading')).toHaveText('拖动滑块, 使图片方向为正');
   await expect(dialog.locator('.puzzle-eyebrow')).toHaveText('请进行安全验证');
+  await dialog.getByRole('img', { name: 'NCaptcha', exact: true }).evaluate(image => image.decode());
   await expect(dialog.locator('.needle, .notch, .steppers, [data-done]')).toHaveCount(0);
   const dimensions = await dialog.evaluate(el => ({ width: el.offsetWidth, height: el.offsetHeight, stage: el.querySelector('.stage').offsetWidth, slider: el.querySelector('.range').offsetHeight }));
-  expect(dimensions.height).toBe(440); expect(dimensions.stage).toBe(200); expect(dimensions.slider).toBe(64);
+  expect(dimensions.height).toBe(445); expect(dimensions.stage).toBe(200); expect(dimensions.slider).toBe(64);
   if (!isMobile) expect(dimensions.width).toBe(400);
   await dialog.screenshot({ path: `test-results/puzzle-reference-${test.info().project.name}.png` });
   await page.keyboard.press('Escape');

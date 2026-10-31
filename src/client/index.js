@@ -1,5 +1,6 @@
 import { createTracking } from './tracking.js';
 import { solvePow, delay, abortError } from './pow.js';
+import logo from './logo.svg';
 
 const defaultAssets = new URL('./', import.meta.url).href;
 const checkmark = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 12 9 17 20 6"/></svg>';
@@ -81,7 +82,8 @@ export function render(container, options = {}) {
         <div class="stage-viewport"><div class="stage" tabindex="0" role="slider" aria-label="旋转图片" aria-describedby="${helpId}" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 度">
           <img alt="旋转验证图片" draggable="false"><span class="stage-spinner" aria-hidden="true"></span>
           <span class="stage-result" aria-hidden="true"><svg viewBox="0 0 64 64"><path class="stage-check" pathLength="1" d="M16 33 28 45 49 21"/><path class="stage-cross" pathLength="1" d="m22 22 20 20 m0-20-20 20"/></svg></span>
-        </div></div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="旋转图片角度" aria-describedby="${helpId}"><p id="${helpId}" class="sr-only">拖动滑块，松开后验证。也可用方向键微调，按 Enter 确认；按 Escape 或点击弹窗外取消。</p><div class="error-text" role="alert"></div><button type="button" class="puzzle-cancel" data-cancel aria-label="取消验证">取消</button>`;
+        </div></div><div class="error-text" role="alert"></div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="旋转图片角度" aria-describedby="${helpId}"><img class="puzzle-logo" width="99" height="20" alt="NCaptcha" draggable="false"><p id="${helpId}" class="sr-only">拖动滑块，松开后验证。也可用方向键微调，按 Enter 确认；按 Escape 或点击弹窗外取消。</p><button type="button" class="puzzle-cancel" data-cancel aria-label="取消验证">取消</button>`;
+      dlg.querySelector('.puzzle-logo').src = logo;
       root.append(dlg);
       const viewport = dlg.querySelector('.stage-viewport'), stage = dlg.querySelector('.stage'), img = dlg.querySelector('img'), range = dlg.querySelector('.range'), eyebrow = dlg.querySelector('.puzzle-eyebrow'), errEl = dlg.querySelector('.error-text');
       img.src = challenge.image;
