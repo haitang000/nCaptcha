@@ -200,7 +200,7 @@ export function rotatePixels(pic, deg) {
   return { w: size, h: size, rgba: out };
 }
 
-/** 双线性缩到 maxSize 见方（题图 340px 就够了，缩小后旋转/编码都快一倍）。 */
+/** 双线性缩到 maxSize 见方，缩小后减少旋转和编码的开销。 */
 export function resize(pic, maxSize, enlarge = false) {
   const size = enlarge ? maxSize : Math.min(maxSize, Math.max(pic.w, pic.h));
   if (size === pic.w && size === pic.h) return pic;
@@ -242,32 +242,20 @@ export function rotateToPng(pic, deg) {
 const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
 
 /**
- * 发题前的随机加工：把题图和公开的原图在像素层拉开距离。
- *
- * 攻击者拿到 challenge 图后，可以拿仓库里公开的题图按同一旋转算法逐角度比对
- *（缩略图级别的稳健比对就行），毫秒级算出答案 —— 不需要任何视觉 AI。光靠
- * 裁剪/缩放/噪声挡不住：同一张照片的内容在正确角度下怎么都能对齐。所以要
- * 在**低频**上动手 —— 缩略图比对看的就是低频亮度分布：
- *   1. 随机裁剪窗口（偏移在内容区内任意取）—— 可见内容每次都不一样；
- *   2. 双线性放大回原画布（1.15–2.0 倍）—— 换采样相位和尺度；
- *   3. 乘一层缓慢变化的随机亮度场（±45%，9×9 网格双线性插值）—— 这是
- *      关键的一步：整幅图的低频亮度分布被搅乱，缩略图比对的特征没了；
- *   4. 后量化为 6 级色阶 + 每像素 ±14 噪声 + 全局亮度抖动 —— 精确比对
- *      彻底失效。
- *
- * 现在要命中答案，攻击者得同时搜索 角度 × 裁剪偏移 × 缩放，而且低频比对
- * 已经失灵，只能退到特征点级别 —— 那已经不是顺手写个脚本能干的活。人眼
- * 不受影响：照片的方向线索还在，亮度场只是像一层自然光照变化。
+ * 发题前做轻微随机加工，优先保留人眼判断朝向需要的主体、地平线和色彩。
+ * 居中轻裁剪、柔和光照和少量亮度噪声让每次出题的像素有所不同。
+ * 这些处理不保证抵抗原图匹配；生产部署仍应使用方向明确的私有题库。
  */
 export function obscurePuzzle(pic) {
   const size = pic.w;
   const b = pic.bounds || { x: 0, y: 0, w: size, h: size };
-  // 窗口在内容区任意位置、任意大小（内容区的 50%–87%）
-  const zoom = 1.15 + Math.random() * 0.85;
+  // 每条边保留至少约 89% 内容；仅在中心附近小幅偏移，避免裁掉方向线索。
+  const zoom = 1.03 + Math.random() * 0.09;
   const cw = Math.min(b.w, Math.max(24, Math.floor(b.w / zoom)));
   const ch = Math.min(b.h, Math.max(24, Math.floor(b.h / zoom)));
-  const ox = b.x + Math.floor(Math.random() * Math.max(1, b.w - cw + 1));
-  const oy = b.y + Math.floor(Math.random() * Math.max(1, b.h - ch + 1));
+  const offset = (length, crop) => Math.round((length - crop) / 2 + (Math.random() - 0.5) * Math.min(length - crop, length * 0.04));
+  const ox = b.x + offset(b.w, cw);
+  const oy = b.y + offset(b.h, ch);
 
   const cropped = Buffer.alloc(cw * ch * 4);
   for (let y = 0; y < ch; y++) {
@@ -282,9 +270,9 @@ export function obscurePuzzle(pic) {
   }
   const up = resize({ w: cw, h: ch, rgba: cropped }, size, true);
 
-  // 13×13 随机亮度场，双线性插值到全分辨率：低频扰动 ±60%，人眼几乎无感
-  const GRID = 13;
-  const field = Array.from({ length: GRID * GRID }, () => 0.4 + Math.random() * 1.2);
+  // 稀疏亮度场仅作 ±6% 的柔和变化，避免明显斑块和过曝。
+  const GRID = 5;
+  const field = Array.from({ length: GRID * GRID }, () => 0.94 + Math.random() * 0.12);
   const fieldAt = (x, y) => {
     const gx = (x / size) * (GRID - 1);
     const gy = (y / size) * (GRID - 1);
@@ -299,24 +287,19 @@ export function obscurePuzzle(pic) {
     return a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy;
   };
 
-  // 色阶后量化到 6 级（≈42 步进），再上亮度场、全局抖动和每像素噪声
-  const gamma = 0.8 + Math.random() * 0.4;
-  const bright = Math.round((Math.random() - 0.5) * 24);
-  // 每题只有 256 种通道输入；预计算保持相同的浮点值和随机噪声分布。
+  // 保留完整色阶；三个通道共享亮度噪声，避免彩色颗粒破坏轮廓和细节。
+  const gamma = 0.96 + Math.random() * 0.08;
+  const bright = Math.round((Math.random() - 0.5) * 6);
   const gammaValues = Float64Array.from({ length: 256 }, (_, value) => Math.pow(value / 255, gamma) * 255);
-  const quant = (v, mul) => {
-    let x = gammaValues[v] * mul;
-    x = Math.round(x / 42) * 42;
-    return clamp255(x + bright + Math.round((Math.random() - 0.5) * 36));
-  };
   for (let y = 0; y < up.h; y++) {
     for (let x = 0; x < up.w; x++) {
       const i = (y * up.w + x) * 4;
       if (up.rgba[i + 3] === 0) continue; // 透明角落不掺噪
       const mul = fieldAt(x, y);
-      up.rgba[i] = quant(up.rgba[i], mul);
-      up.rgba[i + 1] = quant(up.rgba[i + 1], mul);
-      up.rgba[i + 2] = quant(up.rgba[i + 2], mul);
+      const noise = bright + Math.round((Math.random() - 0.5) * 4);
+      for (let c = 0; c < 3; c++) {
+        up.rgba[i + c] = clamp255(Math.round(gammaValues[up.rgba[i + c]] * mul + noise));
+      }
     }
   }
   return up;
