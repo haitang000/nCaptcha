@@ -2,6 +2,29 @@
 export type Mode = 'normal' | 'strict';
 export type Pointer = 'mouse' | 'touch' | 'pen' | 'keyboard';
 export interface Context { ip: string; action?: string }
+/** Blackbox 通过 listed 表示名单命中；只有 IPQS 提供数值风险分。 */
+export interface IpReputation {
+  provider: 'blackbox' | 'ipqs' | 'off'; ip: string;
+  status: 'ok' | 'disabled' | 'skipped' | 'unavailable';
+  fraudScore: number | null; risk: 'low' | 'medium' | 'high' | 'unknown'; checkedAt: number | null;
+  /** 仅 Blackbox 成功查询时提供；false 表示未命中，不表示确定安全。 */
+  listed?: boolean;
+  proxy?: boolean; vpn?: boolean; tor?: boolean; recentAbuse?: boolean; botStatus?: boolean;
+  reason?: 'non_public_ip' | 'timeout' | 'http_error' | 'provider_error' | 'invalid_response' | 'network_error';
+}
+export interface BlackboxOptions {
+  /** 默认 2500ms，最长 10000ms，涵盖连接与读取响应。 */
+  timeoutMs?: number;
+  /** 成功结果默认缓存一小时，失败缓存最多 30 秒。 */
+  cacheTtlMs?: number;
+  fetch?: typeof globalThis.fetch;
+}
+export interface IpqsOptions extends BlackboxOptions {
+  apiKey: string;
+  strictness?: 0 | 1 | 2 | 3;
+  /** 默认 null，只增加 PoW；设置后拒绝大于等于阈值的 IP。 */
+  blockScore?: number | null;
+}
 /** 隐藏 DOM 蜜罐字段；非空表示自动化代理，返回 BOT_DETECTED 并拒绝本次验证。 */
 export interface AgentSignal { agentSignal?: string }
 export interface Point { x: number; y: number; t: number }
@@ -40,8 +63,14 @@ export interface CaptchaOptions {
   minSolveMs?: number; minTokenAgeMs?: number; tokenTtlMs?: number; challengeTtlMs?: number; powTtlMs?: number;
   maxChallengesPerIp?: number; challengeTries?: number; rateLimit?: number; rateWindowMs?: number;
   imagesDir?: string; store?: CaptchaStore; namespace?: string; now?: () => number;
+  ipqs?: IpqsOptions;
+  /** 默认 blackbox；仅传 ipqs 配置时自动选 ipqs，off 关闭信誉查询。 */
+  reputationProvider?: 'blackbox' | 'ipqs' | 'off';
+  blackbox?: BlackboxOptions;
 }
 export interface CaptchaInstance {
+  /** 仅供服务端查询；与验证流程共享缓存、限流和真实 IP 规范化。 */
+  checkIpReputation(context: Context): Promise<IpReputation>;
   createPow(context: Context): Promise<Pow>;
   /** 命中诱饵时标记该轮次并以 BOT_DETECTED 拒绝；重复上报不重复计罚。 */
   reportAgent(input: Context & { ticket: string; source: AgentSource; token?: string }): Promise<never>;

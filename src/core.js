@@ -7,6 +7,7 @@ import { normalizeIp } from './ip.js';
 import { createMemoryStore } from './store.js';
 import { CaptchaError, invalid } from './error.js';
 import { createAgentLures, botDetected } from './agent-lures.js';
+import { createIpReputationChecker, resolveReputationOptions } from './ip-reputation.js';
 export { createMemoryStore, CaptchaError };
 
 const defaults = Object.freeze({
@@ -42,6 +43,7 @@ export function resolveCaptchaOptions(options = {}) {
   for (const [key, [min, max]] of Object.entries(ranges)) if (!Number.isInteger(config[key]) || config[key] < min || config[key] > max) throw new TypeError(`${key} 必须是 ${min}–${max} 的整数`);
   if (typeof config.enabled !== 'boolean' || !['strict', 'normal'].includes(config.mode)) throw new TypeError('enabled 或 mode 配置不正确');
   if (config.minTokenAgeMs >= config.tokenTtlMs || config.minSolveMs >= config.challengeTtlMs) throw new TypeError('最短等待必须小于对应有效期');
+  config.ipReputation = resolveReputationOptions(config);
   return config;
 }
 
@@ -57,6 +59,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
   if (config.enabled && !pictures.length) { if (!options.store) void store.close(); throw new Error('未找到可解码的 PNG 题图，请检查 imagesDir'); }
   let closed = false;
   const key = (kind, id) => `${namespace}:${kind}:${id}`;
+  const checkIp = createIpReputationChecker(config.ipReputation, { store, key, now });
   const ensureOpen = () => { if (closed) throw new CaptchaError('CLOSED', '验证码实例已关闭', 503); };
   function context(input) { ensureOpen(); if (!input || typeof input !== 'object' || Array.isArray(input)) throw invalid(); return validateContext(input); }
   const same = (record, ctx) => record.ip === ctx.ip && record.action === ctx.action;
@@ -88,6 +91,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
     if (retryAfterMs) throw new CaptchaError('RATE_LIMITED', '验证请求过于频繁，请稍后再试', 429, { retryAfterMs });
   }
   async function mint(ctx, agentTicket) {
+    if (config.enabled) await enforceIp(ctx);
     const agent = await agentLures.advance(ctx, agentTicket, config.tokenTtlMs);
     const token = crypto.randomBytes(32).toString('hex');
     await store.set(key('token', token), { ...ctx, agentTicket, issuedAt: now(), expiresAt: now() + config.tokenTtlMs }, config.tokenTtlMs);
@@ -98,6 +102,13 @@ export function createCaptchaCore(options = {}, loadPictures) {
       const list = (previous ?? []).filter(slot => slot.id !== id && slot.expiresAt > now());
       return { value: list.length ? list : undefined, ttlMs: config.challengeTtlMs };
     });
+  }
+  async function enforceIp(ctx) {
+    const result = await checkIp(ctx.ip);
+    if (result.status === 'ok' && result.provider === 'ipqs' && config.ipReputation.blockScore !== null && result.fraudScore >= config.ipReputation.blockScore) {
+      throw new CaptchaError('IP_REPUTATION_BLOCKED', '当前网络风险较高，请更换网络后重试', 403);
+    }
+    return result;
   }
   async function challenge(ctx, agentTicket) {
     const id = crypto.randomBytes(16).toString('hex');
@@ -118,11 +129,17 @@ export function createCaptchaCore(options = {}, loadPictures) {
     } catch (err) { await store.delete(key('challenge', id)); await release(ctx.ip, id); throw err; }
   }
   return {
+    async checkIpReputation(input) {
+      const ctx = context(input); await throttle(ctx.ip);
+      return checkIp(ctx.ip);
+    },
     async createPow(input) {
       const ctx = context(input); await throttle(ctx.ip);
       if (!config.enabled) return { prefix: '', bits: 0, expiresInMs: config.powTtlMs };
+      const ipRisk = await enforceIp(ctx);
       const failures = await reputation(ctx.ip);
-      const bits = Math.min(28, config.powBits + (failures >= 20 ? 4 : failures >= 8 ? 3 : failures >= 3 ? 2 : 0));
+      const riskBits = ipRisk.listed === true ? 2 : ipRisk.risk === 'high' ? 4 : ipRisk.risk === 'medium' ? 2 : 0;
+      const bits = Math.min(28, config.powBits + riskBits + (failures >= 20 ? 4 : failures >= 8 ? 3 : failures >= 3 ? 2 : 0));
       const prefix = crypto.randomBytes(16).toString('hex');
       const agent = await agentLures.issue(ctx, prefix);
       await store.set(key('pow', prefix), { ...ctx, bits, agentTicket: prefix }, config.powTtlMs);
@@ -151,6 +168,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
       // 先消费已绑定的 PoW；去掉蜜罐字段也不能重放本轮凭证。
       if (agentDetected) { await reputation(ctx.ip, true); throw botDetected(); }
       if (!validSignals(trajectory, formBehavior, hints)) { await reputation(ctx.ip, true); throw invalid(); }
+      await enforceIp(ctx);
       // 行为数据全部由客户端自报，不能单独作为签发凭据；normal 保留为兼容别名。
       return challenge(ctx, accepted.agentTicket);
     },

@@ -3,6 +3,11 @@ export interface WorkerEnv {
   CAPTCHA_STATE: DurableObjectNamespace<CaptchaDurableObject>;
   ASSETS: Fetcher;
   CAPTCHA_SECRET: string;
+  CAPTCHA_IP_REPUTATION_PROVIDER?: 'blackbox' | 'ipqs' | 'off';
+  CAPTCHA_BLACKBOX_TIMEOUT_MS?: string; CAPTCHA_BLACKBOX_CACHE_TTL_MS?: string;
+  IPQS_API_KEY?: string;
+  CAPTCHA_IPQS_TIMEOUT_MS?: string; CAPTCHA_IPQS_CACHE_TTL_MS?: string;
+  CAPTCHA_IPQS_STRICTNESS?: string; CAPTCHA_IPQS_BLOCK_SCORE?: string;
   CAPTCHA_ALLOWED_ORIGINS?: string;
   CAPTCHA_MODE?: 'normal' | 'strict';
   CAPTCHA_ENABLED?: 'true' | 'false';

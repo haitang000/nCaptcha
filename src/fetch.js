@@ -46,7 +46,7 @@ export function createFetchHandler(captcha, { basePath = '/captcha/v1', assetPat
       if (origin) headers['Access-Control-Allow-Origin'] = origin;
       if (request.method === 'OPTIONS') {
         const requestedHeaders = (request.headers.get('access-control-request-headers') ?? '').toLowerCase().split(',').map(value => value.trim()).filter(Boolean);
-        if (!origin || route === '/siteverify' || !['GET', 'POST'].includes(request.headers.get('access-control-request-method')) || requestedHeaders.some(value => value !== 'content-type')) throw new CaptchaError('CORS_DENIED', '预检请求未获准', 403);
+        if (!origin || ['/siteverify', '/reputation'].includes(route) || !['GET', 'POST'].includes(request.headers.get('access-control-request-method')) || requestedHeaders.some(value => value !== 'content-type')) throw new CaptchaError('CORS_DENIED', '预检请求未获准', 403);
         return new Response(null, { status: 204, headers: { ...headers, 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '600' } });
       }
       if (clientAssets.has(asset) && ['GET', 'HEAD'].includes(request.method) && serveAsset) {
@@ -57,11 +57,12 @@ export function createFetchHandler(captcha, { basePath = '/captcha/v1', assetPat
         responseHeaders.set('Cache-Control', 'public, max-age=300');
         return new Response(request.method === 'HEAD' ? null : original.body, { status: original.status, headers: responseHeaders });
       }
-      if (route === '/siteverify') {
+      if (route === '/siteverify' || route === '/reputation') {
         if (origin || request.method !== 'POST') throw new CaptchaError('FORBIDDEN', '此接口仅用于服务端核验', 403);
         const actual = request.headers.get('authorization'), expected = `Bearer ${secret}`;
         if (!secret || !actual || Buffer.byteLength(actual) !== Buffer.byteLength(expected) || !crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected))) throw new CaptchaError('UNAUTHORIZED', '核验密钥不正确', 401);
         const body = await readRequestJson(request);
+        if (route === '/reputation') return jsonResponse(200, await captcha.checkIpReputation({ ip: body.ip }), headers);
         return jsonResponse(200, { success: await captcha.consumeToken({ token: body.token, ip: body.ip, action: body.action }) }, headers);
       }
       const ip = getIp(request);

@@ -169,6 +169,7 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 | `POST /captcha/v1/cancel` | 公开 | 取消并释放题目 |
 | `POST /captcha/v1/compat` | 当前轮次票据 | 自动化兼容诱饵：标记所属轮次并返回 `BOT_DETECTED`，不提供绕过验证的能力 |
 | `POST /captcha/v1/siteverify` | **Bearer 密钥** | **后端核验并消费 Token** |
+| `POST /captcha/v1/reputation` | **Bearer 密钥** | 查询指定访客 IP 的名单命中或风险报告 |
 | `GET /health` | 公开 | 服务健康检查 |
 
 ### 核心参数 (`createCaptcha` / 环境变量)
@@ -181,6 +182,68 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 | `minSolveMs` | `CAPTCHA_MIN_SOLVE_MS` | `1000` | 最短求解耗时 (ms)，防脚本瞬发 |
 | `tokenTtlMs` | `CAPTCHA_TOKEN_TTL_MS` | `300000` | 令牌有效期 (5 分钟) |
 | `rateLimit` | `CAPTCHA_RATE_LIMIT` | `60` / 10m | 单 IP 请求频次上限 |
+
+### IP 信誉检测：Blackbox 与 Cloudflare Tunnel
+
+Node 服务在 `.env` 中配置以下内容，重启后启用。示例适用于 `cloudflared` 与验证码服务在同一台机器；若部署在容器或其他主机，`CAPTCHA_TRUSTED_PROXIES` 应填写服务实际看到的紧邻代理地址。
+
+```dotenv
+HOST=127.0.0.1
+CAPTCHA_TRUSTED_PROXIES=127.0.0.1,::1
+CAPTCHA_CLIENT_IP_HEADER=cf-connecting-ip
+CAPTCHA_IP_REPUTATION_PROVIDER=blackbox
+```
+
+只对来自可信代理的连接读取 `CF-Connecting-IP`，不采用请求体自报的 IP。不要把源站端口开放为可绕过 Tunnel 的入口。可信代理缺少有效 Cloudflare IP 头时返回 `CLIENT_IP_INVALID`，不会回退到本机 IP 并跳过查询。支持 IPv6；若 Cloudflare 开启 Pseudo IPv4 的 `Overwrite Headers`，使用 `CF-Connecting-IPv6` 恢复真实地址。业务后端核验 Token 时也必须传入同一个真实访客 IP。
+
+Blackbox v1 无需 API Key，按访客 IP 查询 `https://blackbox.ipinfo.app/api/v1/{ip}`。服务未设置检测源且未配置 IPQS 时默认使用 Blackbox；示例明确指定 `blackbox`，即使保留了旧的 IPQS Key 也不会调用 IPQS。查询结果只表示名单是否命中，不提供数值信誉分或具体代理类别：
+
+| 返回值 | 报告字段 | 默认处理 |
+| :--- | :--- | :--- |
+| `Y` | `status: "ok"`，`listed: true` | PoW 增加 2 位 |
+| `N` | `status: "ok"`，`listed: false` | 保持基础难度；未命中不等于安全 |
+| `E`、超时、HTTP 错误或无效响应 | `status: "unavailable"`，不提供 `listed` | 继续原有完整验证 |
+
+Blackbox 报告的 `fraudScore` 始终为 `null`、`risk` 为 `unknown`，通过 `listed` 判断命中，不把 `Y` / `N` 硬转换为 100 / 0 分。命中只增加 PoW，不自动封禁。新增难度与本地失败次数的惩罚叠加，总上限仍为 28 位；始终需要完成原有图片和行为验证。Blackbox 服务端自身可能缓存结果最长 30 天，检测能力与更新时效见[官方文档](https://blackbox.ipinfo.app/)。
+
+| `createCaptcha` 参数 | 环境变量 | 默认值 |
+| :--- | :--- | :--- |
+| `reputationProvider` | `CAPTCHA_IP_REPUTATION_PROVIDER` | `blackbox`；可选 `ipqs`、`off` |
+| `blackbox.timeoutMs` | `CAPTCHA_BLACKBOX_TIMEOUT_MS` | 2500ms，覆盖请求和响应体读取 |
+| `blackbox.cacheTtlMs` | `CAPTCHA_BLACKBOX_CACHE_TTL_MS` | 3600000ms（一小时） |
+
+单实例内同一 IP 的并发查询合并，缓存使用验证码实例的存储；多副本需共享存储和 namespace。Workers 的 SQLite 缓存可在 Durable Object 重建后继续使用。查询失败缓存最多 30 秒，不立即重试。不同检测源的缓存独立。内网、回环和保留地址跳过外部查询并返回 `skipped`。
+
+查询报告的 HTTP 接口仅供业务后端使用，鉴权密钥与 `/siteverify` 相同；这是验证码服务自己的后端密钥，Blackbox 不需要供应商 Key。浏览器不能查询任意 IP，公开验证码响应也不返回完整风险报告：
+
+```http
+POST /captcha/v1/reputation
+Authorization: Bearer <CAPTCHA_SECRET>
+Content-Type: application/json
+
+{"ip":"8.8.8.8"}
+```
+
+Blackbox 查询成功的报告示例（仅展示格式）：
+
+```json
+{"provider":"blackbox","ip":"8.8.8.8","status":"ok","listed":true,"fraudScore":null,"risk":"unknown","checkedAt":1793404800000}
+```
+
+该查询接口本身不执行拦截，与验证流程共享缓存和单 IP 限流。也可直接调用 `await captcha.checkIpReputation({ ip })`。设置 `CAPTCHA_IP_REPUTATION_PROVIDER=off` 关闭查询，此时返回 `status: "disabled"`。`CAPTCHA_ENABLED=false` 会关闭自动验证和自动信誉检查，但显式查询接口仍可使用。
+
+Workers 本地在 `.dev.vars`、云端在 Worker 的 `vars` 中设置 `CAPTCHA_IP_REPUTATION_PROVIDER=blackbox`，无需添加供应商 Secret。Workers 自动从 Cloudflare 请求头读取真实 IP，无需 Node 的可信代理配置。
+
+IPQS 保留为可选检测源：设置 `CAPTCHA_IP_REPUTATION_PROVIDER=ipqs` 并配置 `IPQS_API_KEY`，或内嵌时使用 `createCaptcha({ reputationProvider: 'ipqs', ipqs: { apiKey } })`。为兼容先前配置，未显式指定检测源而提供 IPQS Key / `ipqs` 对象时自动选用 IPQS。密钥只由服务端持有；Workers 云端使用 `npx wrangler secret put IPQS_API_KEY`。
+
+| `ipqs` 参数 | 环境变量 | 默认值 |
+| :--- | :--- | :--- |
+| `timeoutMs` | `CAPTCHA_IPQS_TIMEOUT_MS` | 2500ms |
+| `cacheTtlMs` | `CAPTCHA_IPQS_CACHE_TTL_MS` | 3600000ms |
+| `strictness` | `CAPTCHA_IPQS_STRICTNESS` | 0，允许 0–3 |
+| `blockScore` | `CAPTCHA_IPQS_BLOCK_SCORE` | `null`，不自动封禁 |
+
+IPQS 的 `fraud_score` 为 0–100，越高风险越高：75–89 增加 2 位 PoW，90–100 增加 4 位。设置 `CAPTCHA_IPQS_BLOCK_SCORE=90` 可拦截大于等于阈值的 IP，返回 HTTP 403、`IP_REPUTATION_BLOCKED`。超时或额度不足时报告未知并继续完整验证。协议见[IPQS 官方 API 文档](https://www.ipqualityscore.com/documentation/proxy-detection-api/overview)。
 
 ---
 

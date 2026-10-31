@@ -3,6 +3,15 @@ import { createHttpHandler, createExpressMiddleware } from 'portable-captcha/htt
 import { render, type Widget } from 'portable-captcha/client';
 const store: CaptchaStore = createMemoryStore();
 const engine = createCaptcha({ store, mode: 'strict', powBits: 20 });
+const blackboxEngine = createCaptcha({ reputationProvider: 'blackbox', blackbox: { timeoutMs: 2500, cacheTtlMs: 3600000 } });
+const blackboxRisk = await blackboxEngine.checkIpReputation({ ip: '8.8.8.8' });
+const listed: boolean | undefined = blackboxRisk.listed;
+await blackboxEngine.close();
+const riskEngine = createCaptcha({ ipqs: { apiKey: 'server-only', timeoutMs: 2500, blockScore: 90, strictness: 0 } });
+const ipRisk = await riskEngine.checkIpReputation({ ip: '8.8.8.8' });
+const fraudScore: number | null = ipRisk.fraudScore;
+createHttpHandler(riskEngine, { trustedProxies: ['127.0.0.1'], clientIpHeader: 'cf-connecting-ip' });
+await riskEngine.close();
 createHttpHandler(engine, { secret: 'x'.repeat(32), allowedOrigins: ['https://example.com'] });
 createExpressMiddleware(engine);
 const widget: Widget = render(document.body, { requestTimeoutMs: 15000, onSuccess(token) { token.toUpperCase(); }, onStateChange(state) { console.log(state); } });

@@ -1,4 +1,15 @@
 import { isIP } from 'node:net';
+import { CaptchaError } from './error.js';
+
+export function cloudflareClientIp(header, ipv6) {
+  if (typeof header !== 'string' || !isIP(header)) throw new CaptchaError('CLIENT_IP_INVALID', '缺少有效的 Cloudflare 访客 IP', 400);
+  // Overwrite Headers 模式用 CF-Connecting-IPv6 保存真实地址。
+  if (isIP(header) === 4 && Number(header.split('.')[0]) >= 240) {
+    if (typeof ipv6 !== 'string' || isIP(ipv6) !== 6) throw new CaptchaError('CLIENT_IP_INVALID', 'Cloudflare 伪 IPv4 缺少真实 IPv6 地址', 400);
+    return normalizeIp(ipv6);
+  }
+  return normalizeIp(header);
+}
 
 // 所有等价 IPv6 写法共用限流、失败声誉和令牌绑定；映射 IPv4 也归一。
 export function normalizeIp(ip) {

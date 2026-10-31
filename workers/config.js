@@ -1,6 +1,7 @@
 import { resolveCaptchaOptions } from '../src/core.js';
+import { reputationOptionsFromEnv } from '../src/ip-reputation.js';
 export function workerConfig(env) {
-  const options = {};
+  const options = reputationOptionsFromEnv(env);
   const names = {
     powBits: 'CAPTCHA_POW_BITS', tolerance: 'CAPTCHA_TOLERANCE', minSolveMs: 'CAPTCHA_MIN_SOLVE_MS', minTokenAgeMs: 'CAPTCHA_MIN_TOKEN_AGE_MS',
     tokenTtlMs: 'CAPTCHA_TOKEN_TTL_MS', challengeTtlMs: 'CAPTCHA_CHALLENGE_TTL_MS', powTtlMs: 'CAPTCHA_POW_TTL_MS', maxChallengesPerIp: 'CAPTCHA_MAX_CHALLENGES_PER_IP',

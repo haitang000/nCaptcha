@@ -5,9 +5,10 @@ import { CaptchaError } from '../src/error.js';
 import { createFetchHandler, jsonResponse } from '../src/fetch.js';
 import { createDurableStore } from './store.js';
 import { workerConfig } from './config.js';
+import { cloudflareClientIp } from '../src/ip.js';
 import puzzleData from '../.workers/puzzles.js';
 
-const operations = ['createPow', 'verifyBehavior', 'solveChallenge', 'cancelChallenge', 'consumeToken', 'reportAgent'];
+const operations = ['createPow', 'verifyBehavior', 'solveChallenge', 'cancelChallenge', 'consumeToken', 'reportAgent', 'checkIpReputation'];
 let pictures;
 function getPictures() {
   return pictures ??= puzzleData.map(({ rgba, ...image }) => ({ ...image, rgba: Buffer.from(rgba, 'base64') }));
@@ -47,7 +48,7 @@ export function createWorkerHandler() {
         }]));
         const handle = createFetchHandler(proxy, {
           ...config.http,
-          getIp: req => validateContext({ ip: req.headers.get('CF-Connecting-IP') }).ip,
+          getIp: req => cloudflareClientIp(req.headers.get('CF-Connecting-IP'), req.headers.get('CF-Connecting-IPv6')),
           serveAsset: (name, req) => { const url = new URL(req.url); url.pathname = '/' + name; url.search = ''; return env.ASSETS.fetch(new Request(url, req)); },
         });
         const url = new URL(request.url);

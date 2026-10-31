@@ -13,6 +13,7 @@
   "vars": {
     "CAPTCHA_ALLOWED_ORIGINS": "https://captcha.haitang000.cn,https://captcha-workers.haitang000.cn,https://portable-captcha.crashv.workers.dev,http://127.0.0.1:8789,http://localhost:8789",
     "CAPTCHA_MODE": "strict",
+    "CAPTCHA_IP_REPUTATION_PROVIDER": "blackbox",
     "CAPTCHA_POW_BITS": "20"
   },
   "dev": { "ip": "127.0.0.1", "port": 8789 }

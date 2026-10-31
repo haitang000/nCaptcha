@@ -2,14 +2,17 @@ import crypto from 'node:crypto';
 import { isIP } from 'node:net';
 import fs from 'node:fs/promises';
 import { CaptchaError } from './error.js';
-import { normalizeIp } from './ip.js';
+import { normalizeIp, cloudflareClientIp } from './ip.js';
 
 const assetNames = new Set(['captcha.js', 'captcha.esm.js', 'captcha.css', 'pow-worker.js']);
-export function getClientIp(req, trustedProxies = []) {
+export function getClientIp(req, trustedProxies = [], clientIpHeader = 'x-forwarded-for') {
   let ip = req.socket?.remoteAddress ?? '';
   ip = normalizeIp(ip);
   // 单层可信代理：只接受紧邻可信代理追加的最右侧地址，不信任客户端自报的首项。
   if (trustedProxies.map(normalizeIp).includes(ip)) {
+    if (clientIpHeader === 'cf-connecting-ip') {
+      return cloudflareClientIp(req.headers['cf-connecting-ip'], req.headers['cf-connecting-ipv6']);
+    }
     const header = req.headers['x-forwarded-for'];
     const forwarded = typeof header === 'string' ? header.split(',').at(-1).trim() : '';
     if (isIP(forwarded)) ip = normalizeIp(forwarded);
@@ -41,11 +44,12 @@ export function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(body));
 }
-export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, allowedOrigins = [], trustedProxies = [], assetPath = '/captcha/assets', onError = console.error } = {}) {
+export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, allowedOrigins = [], trustedProxies = [], clientIpHeader = 'x-forwarded-for', assetPath = '/captcha/assets', onError = console.error } = {}) {
   if (!/^\/(?:[\w-]+\/?)*$/.test(basePath) || basePath.endsWith('/') || !/^\/[\w/-]+$/.test(assetPath) || assetPath.endsWith('/')) throw new TypeError('basePath/assetPath 必须为不带末尾斜杠的绝对路径');
   if (secret !== undefined && (typeof secret !== 'string' || secret.length < 32 || secret.length > 1024)) throw new TypeError('secret 至少需要 32 个字符');
   if (!Array.isArray(allowedOrigins) || allowedOrigins.some(origin => { try { return new URL(origin).origin !== origin || !/^https?:/.test(origin); } catch { return true; } })) throw new TypeError('allowedOrigins 需为精确的 HTTP(S) origin 列表');
   if (!Array.isArray(trustedProxies) || trustedProxies.some(ip => typeof ip !== 'string' || !isIP(ip))) throw new TypeError('trustedProxies 需为代理 IP 列表');
+  if (!['x-forwarded-for', 'cf-connecting-ip'].includes(clientIpHeader)) throw new TypeError('clientIpHeader 必须为 x-forwarded-for 或 cf-connecting-ip');
   return async function handle(req, res) {
     try {
       const url = new URL(req.url, 'http://captcha.internal');
@@ -60,7 +64,7 @@ export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, a
       if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
       const route = url.pathname.slice(basePath.length);
       if (req.method === 'OPTIONS') {
-        if (!origin || !allowedOrigins.includes(origin) || route === '/siteverify') throw new CaptchaError('ORIGIN_DENIED', '该来源未获准访问', 403);
+        if (!origin || !allowedOrigins.includes(origin) || ['/siteverify', '/reputation'].includes(route)) throw new CaptchaError('ORIGIN_DENIED', '该来源未获准访问', 403);
         const wantedHeaders = String(req.headers['access-control-request-headers'] ?? '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);
         if (wantedHeaders.some(h => h !== 'content-type') || !['GET', 'POST'].includes(req.headers['access-control-request-method'])) throw new CaptchaError('CORS_DENIED', '预检请求未获准', 403);
         res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '600' }); res.end(); return true;
@@ -70,17 +74,18 @@ export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, a
         res.writeHead(200, { 'Content-Type': asset.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=300', 'Cross-Origin-Resource-Policy': 'cross-origin' });
         res.end(req.method === 'HEAD' ? undefined : data); return true;
       }
-      if (route === '/siteverify') {
+      if (route === '/siteverify' || route === '/reputation') {
         // 验证端点不向浏览器开放；浏览器组件永远不需要后端密钥。
         if (origin || req.method !== 'POST') throw new CaptchaError('FORBIDDEN', '此接口仅用于服务端核验', 403);
         const provided = req.headers.authorization;
         const expected = `Bearer ${secret}`;
         if (!secret || typeof provided !== 'string' || Buffer.byteLength(provided) !== Buffer.byteLength(expected) || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) throw new CaptchaError('UNAUTHORIZED', '核验密钥不正确', 401);
         const body = await readJson(req);
+        if (route === '/reputation') { sendJson(res, 200, await captcha.checkIpReputation({ ip: body.ip })); return true; }
         const success = await captcha.consumeToken({ token: body.token, ip: body.ip, action: body.action });
         sendJson(res, 200, { success }); return true;
       }
-      const ip = getClientIp(req, trustedProxies);
+      const ip = getClientIp(req, trustedProxies, clientIpHeader);
       if (route === '/pow' && req.method === 'GET') {
         sendJson(res, 200, await captcha.createPow({ ip, action: url.searchParams.get('action') ?? 'default' })); return true;
       }

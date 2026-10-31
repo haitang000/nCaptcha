@@ -10,6 +10,7 @@ import { rotateByKeyboard } from '../browser/keyboard-helper.js';
 
 const secret = 'workerd-private-secret-at-least-32-characters';
 let mf;
+const blackboxRequests = [];
 before(async () => {
   await import('../../scripts/build-workers.js');
   await build({ entryPoints: ['workers/index.js'], outfile: '.workers/test-bundle.js', bundle: true, format: 'esm', platform: 'neutral', target: 'es2022', external: ['node:*', 'cloudflare:workers'] });
@@ -17,12 +18,48 @@ before(async () => {
     durableObjects: { CAPTCHA_STATE: { className: 'CaptchaDurableObject', useSQLite: true } },
     assets: { directory: fileURLToPath(new URL('../../dist/', import.meta.url)), binding: 'ASSETS', run_worker_first: true, routerConfig: { has_user_worker: true } },
     bindings: { CAPTCHA_SECRET: secret, CAPTCHA_ALLOWED_ORIGINS: 'https://business.example,http://127.0.0.1:18879', CAPTCHA_POW_BITS: '3', CAPTCHA_MIN_SOLVE_MS: '0', CAPTCHA_MIN_TOKEN_AGE_MS: '0' },
+    outboundService: request => {
+      const url = new URL(request.url);
+      assert.equal(url.hostname, 'blackbox.ipinfo.app');
+      assert.equal(url.search, '');
+      const ip = decodeURIComponent(url.pathname.split('/').at(-1));
+      blackboxRequests.push(ip);
+      return new Response(ip === '1.1.1.1' ? 'N' : ip === '9.9.9.9' ? 'E' : 'Y');
+    },
   }] }), unsafeInspectDurableObjects: true });
   await mf.ready;
 });
 after(async () => { await mf?.dispose(); });
 const get = (path, ip = '192.0.2.1', headers = {}) => mf.dispatchFetch('https://captcha.example' + path, { headers: { 'CF-Connecting-IP': ip, ...headers } });
 const post = (path, body, ip = '192.0.2.1', headers = {}) => mf.dispatchFetch('https://captcha.example/captcha/v1' + path, { method: 'POST', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+
+test('真实 Workers 无 Key 查询 Blackbox，提高 PoW 并持久缓存；查询接口仍需要后端密钥', async () => {
+  const ip = '8.8.4.4';
+  const pow = await (await get('/captcha/v1/pow?action=login', ip)).json();
+  assert.equal(pow.bits, 5);
+  const result = await solve(ip);
+  assert.ok(result.token);
+  assert.equal(blackboxRequests.filter(value => value === ip).length, 1);
+  await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
+  assert.equal((await post('/reputation', { ip })).status, 401);
+  const lookup = await post('/reputation', { ip }, '203.0.113.99', { Authorization: `Bearer ${secret}` });
+  assert.equal(lookup.status, 200);
+  const data = await lookup.json();
+  assert.equal(data.status, 'ok'); assert.equal(data.provider, 'blackbox'); assert.equal(data.listed, true);
+  assert.equal(data.fraudScore, null); assert.equal(data.proxy, undefined);
+  assert.equal(blackboxRequests.filter(value => value === ip).length, 1);
+  const consumed = await post('/siteverify', { ip, action: 'login', token: result.token }, '203.0.113.99', { Authorization: `Bearer ${secret}` });
+  assert.equal((await consumed.json()).success, true);
+  const unlisted = await get('/captcha/v1/pow', '1.1.1.1');
+  assert.equal(unlisted.status, 200); assert.equal((await unlisted.json()).bits, 3);
+  const unavailable = await get('/captcha/v1/pow', '9.9.9.9');
+  assert.equal(unavailable.status, 200); assert.equal((await unavailable.json()).bits, 3);
+  const failedLookup = await (await post('/reputation', { ip: '9.9.9.9' }, '203.0.113.99', { Authorization: `Bearer ${secret}` })).json();
+  assert.equal(failedLookup.status, 'unavailable'); assert.equal(failedLookup.listed, undefined);
+  const ipv6 = await get('/captcha/v1/pow', '240.1.2.3', { 'CF-Connecting-IPv6': '2001:4860:4860::8844' });
+  assert.equal(ipv6.status, 200); assert.equal((await ipv6.json()).bits, 5);
+  assert.ok(blackboxRequests.includes('2001:4860:4860::8844'));
+});
 async function issue(ip, action = 'login') {
   const powResponse = await get('/captcha/v1/pow?action=' + action, ip);
   assert.equal(powResponse.status, 200, await powResponse.clone().text());

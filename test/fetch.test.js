@@ -66,3 +66,18 @@ test('Web JSON 限制同时覆盖 Content-Length 和没有声明长度的流', a
   for (const body of ['{', 'null', '[]']) await assert.rejects(readRequestJson(new Request('https://example.com', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })), error => error.code === 'INVALID_JSON');
   await assert.rejects(readRequestJson(new Request('https://example.com', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'x'.repeat(65536) }) })), error => error.code === 'BODY_TOO_LARGE');
 });
+
+test('Web 信誉分查询只允许带密钥的后端 POST，查询异常明确返回未知', async t => {
+  let calls = 0;
+  const f = fixture({ ipqs: { apiKey: 'fetch-ipqs-private-key', fetch: async () => { calls++; return Response.json({ success: false }); } } }); t.after(() => f.close());
+  const handle = createFetchHandler(f.captcha, { secret, getIp: () => context.ip, allowedOrigins: ['https://app.example'] });
+  const request = (headers = {}) => new Request('https://captcha.example/captcha/v1/reputation', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ ip: '8.8.8.8' }) });
+  assert.equal((await handle(request())).status, 401);
+  assert.equal((await handle(request({ Authorization: `Bearer ${secret}`, Origin: 'https://app.example' }))).status, 403);
+  assert.equal((await handle(new Request('https://captcha.example/captcha/v1/reputation', { method: 'OPTIONS', headers: { Origin: 'https://app.example', 'Access-Control-Request-Method': 'POST' } }))).status, 403);
+  assert.equal(calls, 0);
+  const response = await handle(request({ Authorization: `Bearer ${secret}` }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.ip, '8.8.8.8'); assert.equal(body.status, 'unavailable'); assert.equal(body.fraudScore, null); assert.equal(body.risk, 'unknown');
+});
