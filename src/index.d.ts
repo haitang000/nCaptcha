@@ -17,9 +17,12 @@ export interface BehaviorAssessment {
 }
 /** 离线省略 elapsedMs 时不检查服务端时间；线上求解始终传入真实已用时间。 */
 export function assessChallengeBehavior(input: { angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null; formBehavior?: FormBehavior | null }, options?: { elapsedMs?: number }): BehaviorAssessment;
-export interface Pow { prefix: string; bits: number; expiresInMs: number }
-export interface TokenResult { token: string; expiresInMs: number; usableAfterMs: number }
-export interface Challenge { id: string; image: string; expiresInMs: number }
+export type AgentSource = 'fastpass' | 'compat-event' | 'canary-token' | 'fallback-api';
+/** 每轮诱饵票据及假令牌；token 不能通过业务核验。 */
+export interface AgentLures { ticket: string; token: string; expiresInMs: number }
+export interface Pow { prefix: string; bits: number; expiresInMs: number; agent?: AgentLures }
+export interface TokenResult { token: string; expiresInMs: number; usableAfterMs: number; agent?: AgentLures }
+export interface Challenge { id: string; image: string; expiresInMs: number; agent?: AgentLures }
 export type StateChange<T, R> = { value: T; ttlMs: number; result?: R } | { value?: undefined; ttlMs?: number; result?: R };
 /** update 必须保证同一 key 的原子读改写；传给 updater 的对象须隔离，过期视为 undefined。
  * updater 为同步纯函数，返回 undefined value 表示删除。ttlMs 从提交时刻起算。
@@ -40,6 +43,8 @@ export interface CaptchaOptions {
 }
 export interface CaptchaInstance {
   createPow(context: Context): Promise<Pow>;
+  /** 命中诱饵时标记该轮次并以 BOT_DETECTED 拒绝；重复上报不重复计罚。 */
+  reportAgent(input: Context & { ticket: string; source: AgentSource; token?: string }): Promise<never>;
   verifyBehavior(input: Context & AgentSignal & { pow?: { prefix: string; nonce: string }; trajectory?: Point[] | null; formBehavior?: FormBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
   /** 指针操作需本轮轨迹；键盘操作还需可重放到提交角度的 keyboard 记录。 */
   solveChallenge(input: Context & AgentSignal & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult>;

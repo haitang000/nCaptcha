@@ -5,6 +5,19 @@ import { fixture, nonceFor, challengeTrajectory } from './helpers.js';
 
 const secret = 'worker-secret-for-backend-only-1234567';
 const context = { ip: '192.0.2.4', action: 'login' };
+test('Web 备用接口支持自定义路径，GET 不消费票据，禁止来源与伪造 IP 无效', async t => {
+  const f = fixture(); t.after(() => f.close());
+  const handle = createFetchHandler(f.captcha, { basePath: '/custom', getIp: () => context.ip, allowedOrigins: ['https://app.example'] });
+  const pow = await f.captcha.createPow(context);
+  const data = { action: context.action, ticket: pow.agent.ticket, source: 'compat-event', ip: '192.0.2.99' };
+  const request = (headers = {}) => new Request('https://captcha.example/custom/compat', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(data) });
+  assert.equal((await handle(new Request('https://captcha.example/custom/compat'))).status, 404);
+  assert.equal((await handle(request({ Origin: 'https://evil.example' }))).status, 403);
+  const response = await handle(request({ Origin: 'https://app.example' }));
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).source, 'compat-event');
+});
+
 test('Web 适配器透传 agent 蜜罐字段并返回 403 机器人标记', async t => {
   const f = fixture(); t.after(() => f.close());
   const handle = createFetchHandler(f.captcha, { getIp: () => context.ip });

@@ -14,7 +14,7 @@ export interface Widget {
   reset(): void;
   destroy(): void;
 }
-export class CaptchaClientError extends Error { code: string; status?: number; triesRemaining?: number; retryAfterMs?: number; constructor(message: string, code?: string, details?: Record<string, unknown>) }
+export class CaptchaClientError extends Error { code: string; status?: number; triesRemaining?: number; retryAfterMs?: number; bot?: boolean; source?: 'fastpass' | 'compat-event' | 'canary-token' | 'fallback-api'; constructor(message: string, code?: string, details?: Record<string, unknown>) }
 export function render(container: string | HTMLElement, options?: WidgetOptions): Widget;
 export const Captcha: { render: typeof render };
 export default Captcha;

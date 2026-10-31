@@ -7,7 +7,7 @@ import { createDurableStore } from './store.js';
 import { workerConfig } from './config.js';
 import puzzleData from '../.workers/puzzles.js';
 
-const operations = ['createPow', 'verifyBehavior', 'solveChallenge', 'cancelChallenge', 'consumeToken'];
+const operations = ['createPow', 'verifyBehavior', 'solveChallenge', 'cancelChallenge', 'consumeToken', 'reportAgent'];
 let pictures;
 function getPictures() {
   return pictures ??= puzzleData.map(({ rgba, ...image }) => ({ ...image, rgba: Buffer.from(rgba, 'base64') }));

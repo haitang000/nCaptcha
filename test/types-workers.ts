@@ -7,6 +7,7 @@ const request = new Request('https://captcha.example/health');
 const response: Response = await worker.fetch(request, env);
 await createWorkerHandler().fetch(request, env);
 await env.CAPTCHA_STATE.get(env.CAPTCHA_STATE.idFromName('192.0.2.1')).execute('createPow', { ip: '192.0.2.1' });
+engine.reportAgent({ ip: '192.0.2.1', ticket: '0'.repeat(32), source: 'fallback-api' }).catch(() => {});
 createFetchHandler(engine, { getIp: () => '192.0.2.1' });
 const objectType: typeof CaptchaDurableObject = CaptchaDurableObject;
 console.log(response.status, objectType);

@@ -11,6 +11,11 @@ const assessment: BehaviorAssessment = assessChallengeBehavior({ angle: 0, point
 const passed: boolean = assessment.passed;
 const metric: number | boolean = assessment.dimensions.keyboard.metrics.events;
 const pow = await engine.createPow(context);
+if (pow.agent) {
+  const ticket: string = pow.agent.ticket;
+  const token: string = pow.agent.token;
+  engine.reportAgent({ ...context, ticket, token, source: 'canary-token' }).catch(() => {});
+}
 const result = await engine.verifyBehavior({ ...context, pow: { prefix: pow.prefix, nonce: '1' } });
 if ('token' in result) { const token: TokenResult = result; await engine.consumeToken({ ...context, token: token.token }); }
 else await engine.solveChallenge({ ...context, id: result.challenge.id, angle: 0, pointer: 'mouse', trajectory: [{ x: 1, y: 1, t: 0 }, { x: 3, y: 1, t: 50 }, { x: 4, y: 1, t: 120 }] });

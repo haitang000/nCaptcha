@@ -37,3 +37,78 @@ test('已申报为 agent 时即使关闭图片验证也不签发令牌', async t
   await assert.rejects(f.captcha.verifyBehavior({ ...ctx, agentSignal: 'automated-agent' }), detected);
   assert.ok((await f.captcha.verifyBehavior({ ...ctx, agentSignal: '' })).token);
 });
+
+test('ABCD 每轮随机票据和假令牌，四个来源均标记所属轮次并拒绝重放', async t => {
+  const f = fixture(); t.after(() => f.close());
+  const tickets = new Set(), tokens = new Set();
+  for (const source of ['fastpass', 'compat-event', 'canary-token', 'fallback-api']) {
+    const pow = await f.captcha.createPow(ctx);
+    assert.match(pow.agent.ticket, /^[a-f0-9]{32}$/); assert.match(pow.agent.token, /^[a-f0-9]{64}$/);
+    tickets.add(pow.agent.ticket); tokens.add(pow.agent.token);
+    await assert.rejects(f.captcha.reportAgent({ ...ctx, ...pow.agent, source }), error => detected(error) && error.details.source === source);
+    await assert.rejects(f.captcha.verifyBehavior({ ...ctx, pow: { prefix: pow.prefix, nonce: nonceFor(pow) } }), detected);
+    assert.equal(await f.captcha.consumeToken({ ...ctx, token: pow.agent.token }), false);
+  }
+  assert.equal(tickets.size, 4); assert.equal(tokens.size, 4);
+});
+
+test('备用接口校验票据、来源、IP 和 action；伪造请求不会损坏正常轮次', async t => {
+  const f = fixture(); t.after(() => f.close());
+  const pow = await f.captcha.createPow(ctx);
+  const input = { ...ctx, ticket: pow.agent.ticket, source: 'fallback-api' };
+  for (const bad of [{ ticket: 'bad' }, { source: 'unknown' }, { source: 'canary-token', token: 'a'.repeat(64) }]) {
+    await assert.rejects(f.captcha.reportAgent({ ...input, ...bad }), error => error.code === 'INVALID_INPUT');
+  }
+  await assert.rejects(f.captcha.reportAgent({ ...input, ticket: '0'.repeat(32) }), error => error.code === 'AGENT_TICKET_INVALID');
+  for (const wrong of [{ ip: '127.0.0.2' }, { action: 'other' }]) {
+    await assert.rejects(f.captcha.reportAgent({ ...input, ...wrong }), error => error.code === 'BINDING_MISMATCH');
+    assert.equal(await f.captcha.consumeToken({ ...ctx, ...wrong, token: pow.agent.token }), false);
+  }
+  assert.ok((await f.captcha.verifyBehavior({ ...ctx, pow: { prefix: pow.prefix, nonce: nonceFor(pow) } })).challenge);
+});
+
+test('命中备用接口释放当前图片名额，同 IP 另一轮挑战可正常通过', async t => {
+  const f = fixture({ maxChallengesPerIp: 2 }); t.after(() => f.close());
+  const first = (await verify(f.captcha)).challenge, second = (await verify(f.captcha)).challenge;
+  await assert.rejects(f.captcha.reportAgent({ ...ctx, ticket: first.agent.ticket, source: 'fallback-api' }), detected);
+  await assert.rejects(f.captcha.solveChallenge({ ...ctx, id: first.id, angle: -f.answer(first.id), trajectory: challengeTrajectory }), detected);
+  assert.ok((await f.captcha.solveChallenge({ ...ctx, id: second.id, angle: -f.answer(second.id), trajectory: challengeTrajectory })).token);
+  assert.ok((await verify(f.captcha)).challenge);
+});
+
+test('业务核验收到假令牌时标记其轮次，已签发的同轮真令牌也不能再消费', async t => {
+  const f = fixture(); t.after(() => f.close());
+  const { challenge } = await verify(f.captcha);
+  const result = await f.captcha.solveChallenge({ ...ctx, id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory });
+  assert.notEqual(result.token, challenge.agent.token);
+  assert.equal(await f.captcha.consumeToken({ ...ctx, token: challenge.agent.token }), false);
+  assert.equal(await f.captcha.consumeToken({ ...ctx, token: result.token }), false);
+  await assert.rejects(f.captcha.reportAgent({ ...ctx, ticket: challenge.agent.ticket, source: 'fallback-api' }), error => detected(error) && error.details.source === 'canary-token');
+  const independent = await solved(f);
+  assert.equal(await f.captcha.consumeToken({ ...ctx, token: independent.token }), true);
+});
+
+test('PoW、图片、令牌阶段延长所属票据有效期，最终到期后拒绝上报', async t => {
+  const f = fixture({ powTtlMs: 10, challengeTtlMs: 40, tokenTtlMs: 50 }); t.after(() => f.close());
+  const pow = await f.captcha.createPow(ctx); f.advance(8);
+  const { challenge } = await f.captcha.verifyBehavior({ ...ctx, pow: { prefix: pow.prefix, nonce: nonceFor(pow) } });
+  f.advance(20);
+  const result = await f.captcha.solveChallenge({ ...ctx, id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory });
+  f.advance(20);
+  assert.equal(result.agent.ticket, pow.agent.ticket); assert.equal(result.agent.expiresInMs, 50);
+  assert.equal(await f.captcha.consumeToken({ ...ctx, token: pow.agent.token }), false);
+  assert.equal(await f.captcha.consumeToken({ ...ctx, token: result.token }), false);
+  f.advance(30);
+  await assert.rejects(f.captcha.reportAgent({ ...ctx, ticket: pow.agent.ticket, source: 'fastpass' }), error => error.code === 'AGENT_TICKET_INVALID');
+  assert.equal(await f.captcha.consumeToken({ ...ctx, token: pow.agent.token }), false);
+});
+
+test('并发重复上报只计罚一次且不延长票据寿命', async t => {
+  const f = fixture({ powTtlMs: 100 }); t.after(() => f.close());
+  const pow = await f.captcha.createPow(ctx);
+  const results = await Promise.allSettled(Array.from({ length: 20 }, () => f.captcha.reportAgent({ ...ctx, ticket: pow.agent.ticket, source: 'fastpass' })));
+  assert.ok(results.every(result => result.status === 'rejected' && detected(result.reason)));
+  assert.equal((await f.captcha.createPow(ctx)).bits, 3);
+  f.advance(100);
+  await assert.rejects(f.captcha.reportAgent({ ...ctx, ticket: pow.agent.ticket, source: 'fastpass' }), error => error.code === 'AGENT_TICKET_INVALID');
+});

@@ -66,7 +66,7 @@ export function createFetchHandler(captcha, { basePath = '/captcha/v1', assetPat
       }
       const ip = getIp(request);
       if (route === '/pow' && request.method === 'GET') return jsonResponse(200, await captcha.createPow({ ip, action: url.searchParams.get('action') ?? 'default' }), headers);
-      const methods = { '/verify': 'verifyBehavior', '/challenge': 'solveChallenge', '/cancel': 'cancelChallenge' };
+      const methods = { '/verify': 'verifyBehavior', '/challenge': 'solveChallenge', '/cancel': 'cancelChallenge', '/compat': 'reportAgent' };
       if (methods[route] && request.method === 'POST') {
         const body = await readRequestJson(request);
         const value = await captcha[methods[route]]({ ...body, ip });

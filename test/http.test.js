@@ -40,6 +40,18 @@ test('HTTP 透传 agent 蜜罐字段并返回机器人标记，不返回令牌',
   const body = await response.json();
   assert.equal(body.code, 'BOT_DETECTED'); assert.equal(body.bot, true); assert.equal(body.token, undefined);
 });
+
+test('HTTP 备用接口仅接受有效票据的 POST，GET 与伪造请求不标记轮次', async t => {
+  const f = await serverFor(t);
+  const pow = await (await fetch(f.base + '/captcha/v1/pow?action=login')).json();
+  const input = { action: 'login', ticket: pow.agent.ticket, source: 'fallback-api' };
+  assert.equal((await fetch(f.base + '/captcha/v1/compat?' + new URLSearchParams(input))).status, 404);
+  assert.equal((await f.post('/compat', { ...input, action: 'other' })).status, 403);
+  assert.equal((await f.post('/compat', { source: 'fallback-api' })).status, 400);
+  const response = await f.post('/compat', input);
+  assert.equal(response.status, 403); assert.equal((await response.json()).source, 'fallback-api');
+  assert.equal((await (await f.post('/verify', { action: 'login', pow: { prefix: pow.prefix, nonce: nonceFor(pow) } })).json()).code, 'BOT_DETECTED');
+});
 test('来源白名单、预检、核验不向浏览器开放、配置不泄露密钥', async t => {
   const f = await serverFor(t);
   const good = { Origin: 'https://business.example' };

@@ -29,13 +29,13 @@ export function render(container, options = {}) {
   const button = root.querySelector('button'), label = root.querySelector('.label'), mark = root.querySelector('.mark'), feedback = root.querySelector('.feedback');
   const tracking = createTracking(button, form);
   const lifetime = new AbortController();
-  let controller = new AbortController(), task = null, prepared = null, proofTask = null, token = null, expiresAt = 0, expiryTimer = null, dialog = null, cancelPuzzle = null, challengeId = null, destroyed = false;
+  let controller = new AbortController(), task = null, prepared = null, proofTask = null, reportTask = null, token = null, expiresAt = 0, expiryTimer = null, dialog = null, cancelPuzzle = null, challengeId = null, destroyed = false;
   const notify = (name, ...args) => { try { options[name]?.(...args); } catch (err) { console.error('[captcha] 回调异常', err); } };
   const motion = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
   const agentSignal = createAgentTrap(host, lifetime.signal, () => {
     clearTimeout(expiryTimer); expiryTimer = null; token = null; expiresAt = 0;
     state('error', '已标记为机器人', '已检测到自动化代理，验证被拒绝');
-  });
+  }, { apiUrl, action, onActivate: activateAgent });
   function state(value, text, error = '') {
     if (destroyed) return;
     const from = button.getBoundingClientRect().width;
@@ -67,7 +67,10 @@ export function render(container, options = {}) {
         const response = await (options.fetch ?? fetch)(apiUrl + path, { method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', signal: transport.signal,
           headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify({ ...body, ...(agent ? { agentSignal: agent } : {}), action }) });
         const data = await response.json();
-        if (!response.ok) throw new CaptchaClientError(data.error || '验证请求失败', data.code, { status: response.status, triesRemaining: data.triesRemaining, retryAfterMs: data.retryAfterMs });
+        if (!response.ok) {
+          if (!transport.signal.aborted && data.code === 'BOT_DETECTED') agentSignal.detect(data.source ?? 'automated-agent');
+          throw new CaptchaClientError(data.error || '验证请求失败', data.code, { status: response.status, triesRemaining: data.triesRemaining, retryAfterMs: data.retryAfterMs, bot: data.bot, source: data.source });
+        }
         return { ...data, roundTripMs: performance.now() - started };
       })();
       // 自定义 fetch 或响应体实现即使忽略 abort，也不能阻塞验证或接管后续任务。
@@ -79,6 +82,7 @@ export function render(container, options = {}) {
   }
   function prepareToken(result) {
     if (typeof result.token !== 'string' || !/^[a-f0-9]{64}$/.test(result.token) || !Number.isFinite(result.expiresInMs) || result.expiresInMs <= 0 || !Number.isFinite(result.usableAfterMs) || result.usableAfterMs < 0) throw new CaptchaClientError('服务端返回了不正确的令牌');
+    if (result.agent) agentSignal.update(result.agent);
     const receivedAt = performance.now();
     return { ...result, tokenExpiresAt: receivedAt + result.expiresInMs - (result.roundTripMs ?? 0), tokenUsableAt: receivedAt + result.usableAfterMs };
   }
@@ -87,6 +91,8 @@ export function render(container, options = {}) {
     if (proofTask) return proofTask;
     const job = (async () => {
       const proof = await request(`/pow?action=${encodeURIComponent(action)}`, undefined, signal);
+      if (signal.aborted) throw abortError();
+      agentSignal.update(proof.agent);
       const deadline = performance.now() + proof.expiresInMs - proof.roundTripMs;
       const nonce = await solvePow({ ...proof, expiresInMs: Math.max(1, deadline - performance.now()) }, options.workerUrl ?? new URL('pow-worker.js', assets).href, signal);
       if (signal.aborted) throw abortError();
@@ -98,10 +104,31 @@ export function render(container, options = {}) {
     return job;
   }
   function releaseChallenge(id) { if (id) void request('/cancel', { id }, AbortSignal.timeout(3000), 3000).catch(() => {}); }
+  function activateAgent(source) {
+    if (destroyed || reportTask) return;
+    const signal = controller.signal;
+    const job = (async () => {
+      try {
+        let round = agentSignal.current();
+        if (!round) { await prepareProof(signal); round = agentSignal.current(); }
+        if (signal.aborted) throw abortError();
+        if (round) await request('/compat', { ticket: round.ticket, source }, signal);
+        else await request('/verify', { pow: await prepareProof(signal) }, signal);
+      } catch (error) {
+        if (signal.aborted) return;
+        state('error', '已标记为机器人', error.message);
+        if (task) cancelPuzzle?.(error);
+        else notify('onError', error);
+      }
+    })();
+    reportTask = job;
+    void job.finally(() => { if (reportTask === job) reportTask = null; }).catch(() => {});
+  }
   function puzzle(challenge, signal) {
     return new Promise((resolve, reject) => {
       if (!challenge || !/^[a-f0-9]{32}$/.test(challenge.id) || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(challenge.image)) { reject(new CaptchaClientError('服务端返回了不正确的图片挑战')); return; }
       challengeId = challenge.id;
+      agentSignal.update(challenge.agent);
       const dlg = document.createElement('dialog'); dialog = dlg; dlg.className = 'puzzle';
       const titleId = `captcha-title-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
       dlg.setAttribute('aria-labelledby', titleId);
@@ -141,7 +168,7 @@ export function render(container, options = {}) {
       const aborted = () => finish(null, abortError());
       const expireChallenge = () => finish(null, new CaptchaClientError('图片挑战已过期，请重新验证', 'CHALLENGE_EXPIRED'));
       let challengeTimer = setTimeout(expireChallenge, Math.max(1, challenge.expiresInMs));
-      cancelPuzzle = () => finish(null);
+      cancelPuzzle = error => finish(null, error);
       signal.addEventListener('abort', aborted, { once: true });
       function paint(value) {
         if (settled || submitting) return;
@@ -161,6 +188,7 @@ export function render(container, options = {}) {
         if (!next || !/^[a-f0-9]{32}$/.test(next.id) || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(next.image) || !Number.isFinite(next.expiresInMs) || next.expiresInMs <= 0) throw new CaptchaClientError('服务端返回了不正确的图片挑战');
         if (settled) { releaseChallenge(next.id); return; }
         challenge = next; challengeId = next.id;
+        agentSignal.update(next.agent);
         challengeTimer = setTimeout(expireChallenge, Math.max(1, next.expiresInMs - response.roundTripMs));
         // 解码完成后再换图，避免新图片滑入时出现空白。
         const preload = new Image(); preload.src = next.image;
@@ -265,8 +293,10 @@ export function render(container, options = {}) {
   function reset() {
     if (destroyed) return;
     controller.abort(); cancelPuzzle?.(); controller = new AbortController();
-    clearTimeout(expiryTimer); expiryTimer = null; token = null; expiresAt = 0; prepared = null; proofTask = null; task = null;
-    state('idle', '我不是机器人');
+    clearTimeout(expiryTimer); expiryTimer = null; token = null; expiresAt = 0; prepared = null; proofTask = null; reportTask = null; task = null;
+    agentSignal.clear();
+    if (agentSignal()) state('error', '已标记为机器人', '已检测到自动化代理，验证被拒绝');
+    else state('idle', '我不是机器人');
   }
   function getToken() { if (agentSignal()) return null; if (token && performance.now() >= expiresAt) { reset(); notify('onExpire'); } return token; }
   function verify() {

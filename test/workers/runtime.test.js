@@ -55,6 +55,30 @@ test('真实 workerd 的 PoW 和图片挑战阶段均拒绝 agent 蜜罐并消�
   const replay = await post('/challenge', { action: 'login', id: challenge.id, angle: 0 }, ip);
   assert.equal((await replay.json()).code, 'CHALLENGE_EXPIRED');
 });
+
+test('真实 workerd 的 ABCD 来源可识别，假令牌在 Durable Object 重建后仍使同轮真令牌失效', async () => {
+  const ip = '192.0.2.41';
+  for (const source of ['fastpass', 'compat-event', 'fallback-api']) {
+    const pow = await (await get('/captcha/v1/pow?action=login', ip)).json();
+    assert.equal((await get('/captcha/v1/compat', ip)).status, 404);
+    const response = await post('/compat', { action: 'login', ticket: pow.agent.ticket, source }, ip);
+    assert.equal(response.status, 403); assert.equal((await response.json()).source, source);
+    const replay = await post('/verify', { action: 'login', pow: { prefix: pow.prefix, nonce: nonceFor(pow) } }, ip);
+    assert.equal((await replay.json()).code, 'BOT_DETECTED');
+  }
+  const challenge = await issue(ip);
+  const row = (await (await dbFor(ip)).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
+  const solved = await (await post('/challenge', { action: 'login', id: challenge.id, angle: -JSON.parse(row.value).answer, trajectory: challengeTrajectory }, ip)).json();
+  assert.ok(solved.token);
+  await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
+  const auth = { Authorization: `Bearer ${secret}` };
+  const canary = await post('/siteverify', { ip, action: 'login', token: challenge.agent.token }, '203.0.113.99', auth);
+  assert.deepEqual(await canary.json(), { success: false });
+  const genuine = await post('/siteverify', { ip, action: 'login', token: solved.token }, '203.0.113.99', auth);
+  assert.deepEqual(await genuine.json(), { success: false });
+  const reported = await post('/compat', { action: 'login', ticket: challenge.agent.ticket, source: 'fallback-api' }, ip);
+  assert.equal((await reported.json()).source, 'canary-token');
+});
 test('真实 workerd 严格挑战、图片 PNG、原子并发消费和重放', async () => {
   const ip = '192.0.2.1';
   const challenge = await issue(ip);

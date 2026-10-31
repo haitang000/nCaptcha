@@ -84,7 +84,7 @@ export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, a
       if (route === '/pow' && req.method === 'GET') {
         sendJson(res, 200, await captcha.createPow({ ip, action: url.searchParams.get('action') ?? 'default' })); return true;
       }
-      const methods = { '/verify': 'verifyBehavior', '/challenge': 'solveChallenge', '/cancel': 'cancelChallenge' };
+      const methods = { '/verify': 'verifyBehavior', '/challenge': 'solveChallenge', '/cancel': 'cancelChallenge', '/compat': 'reportAgent' };
       if (methods[route] && req.method === 'POST') {
         const body = await readJson(req);
         const result = await captcha[methods[route]]({ ...body, ip });

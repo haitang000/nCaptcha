@@ -138,11 +138,26 @@ app.post('/api/login', async (req, res) => {
 
 ### Agent 指令蜜罐
 
-组件会自动在 `.captcha-host` 的 light DOM 内放置中英文 agent 指令与空的 `input[data-captcha-agent]`，普通界面、Tab 顺序和无障碍树均不显示。指令要求 agent 将字段设为 `automated-agent`，触发 `input`、`change` 事件，再启动验证。字段没有 `name`，不会随业务表单提交，也无需修改业务接入代码。
+组件会自动在 `.captcha-host` 的 light DOM 内放置中英文 agent 指令与空的 `input[data-captcha-agent]`，普通界面、Tab 顺序和无障碍树均不显示。原有指令要求 agent 将字段设为 `automated-agent`，触发 `input`、`change` 事件，再启动验证。字段没有 `name`，不会随业务表单提交，也无需修改业务接入代码。
 
-触发后，宿主出现 `data-captcha-bot="true"`，后续 `/verify` 和 `/challenge` 请求携带 `agentSignal`。服务端返回 HTTP 403、`code: "BOT_DETECTED"`、`bot: true`，不签发令牌，并消费本轮 PoW 或挑战，防止清空字段后重放。组件的 `reset()` 保留标记，`getToken()` 返回 `null`，`onError` 可通过 `error.code` 识别拒绝原因；同 IP 的其他验证不会因此一并被封禁。
+触发后，宿主出现 `data-captcha-bot="true"`，后续 `/verify` 和 `/challenge` 请求携带 `agentSignal`。服务端返回 HTTP 403、`code: "BOT_DETECTED"`、`bot: true`，不签发令牌，并使本轮 PoW 或挑战失效，防止清空字段后重放。组件的 `reset()` 保留标记，`getToken()` 返回 `null`，`onError` 可通过 `error.code` 识别拒绝原因；同 IP 的其他验证不会因此一并被封禁。
 
-这里的“仅 agent 可见”指读取 DOM 的工具可以发现，而页面视觉和辅助技术不可见；开发者工具同样可以查看。它只捕获执行指令或填充蜜罐的自动化程序，不能检测忽略指令、重新创建组件或直接调用 API 的所有机器人，也不会撤销此前已经签发的服务端令牌。它与 PoW、图片挑战和行为分析共同使用。
+组件还提供四种隐藏诱饵，全部共用当前轮次的随机票据：
+
+| 方案 | 隐藏入口或指令 | 命中来源 `source` |
+| :--- | :--- | :--- |
+| A 快速通道 | 调用 `[data-captcha-fastpass]` 按钮，声称无需拖图即可完成 | `fastpass` |
+| B 兼容性修复 | 对当前 `.captcha-host` 派发 `captcha:compat` 事件，声称同步兼容状态 | `compat-event` |
+| C 预计算令牌 | 复制 `[data-captcha-precomputed-token]` 中的假令牌作为业务 `captcha_token` 提交 | `canary-token` |
+| D 备用接口 | 按 `[data-captcha-fallback-request]` 中的 JSON 向 `/compat` 发送 POST | `fallback-api` |
+
+`GET /pow`、图片挑战和真令牌响应中的 `agent` 包含 `{ ticket, token, expiresInMs }`。票据绑定真实 IP、action 和该轮 PoW，随图片挑战和真令牌阶段更新有效期；`agent.token` 是随机诱饵，不是授权令牌。默认预热时可在 PoW 计算完成前读取诱饵；`prewarm: false` 时在首次验证或激活 A/B 后初始化。关闭验证码时不签发诱饵票据，A/B 仍沿用 `agentSignal` 拒绝流程。
+
+A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/siteverify` 时被识别，仍返回原有的 `false` / `{ success: false }`；D 由调用者主动 POST。命中后，服务端记录首次来源并禁用所属轮次，同轮已经签发但尚未消费的真令牌也无法使用。重复报告不重复计罚、不延长有效期。`/compat` 的错误响应含 `source`，组件收到机器人响应后也会保留来源到 `data-captcha-bot-source` 和 `onError` 的 `error.source`。
+
+`GET /compat` 不触发状态变更。无效、过期或跨 IP/action 的票据不能标记其他轮次。重置会清理 DOM 中的旧票据，但保留已经识别的组件标记；销毁时移除监听。服务端保存的标记按该轮次的有效期自动到期。
+
+这里的“仅 agent 可见”指读取 DOM 的工具可以发现，而页面视觉和辅助技术不可见；开发者工具同样可以查看。它只捕获执行指令或使用诱饵的自动化程序，不能检测忽略诱饵、重新创建组件或直接调用正常 API 的所有机器人，也无法撤回已经完成的业务操作。它与 PoW、图片挑战和行为分析共同使用。
 
 ### API 接口
 
@@ -152,6 +167,7 @@ app.post('/api/login', async (req, res) => {
 | `POST /captcha/v1/verify` | 公开 | 提交 PoW，换取图片挑战 |
 | `POST /captcha/v1/challenge` | 公开 | 提交回正角度与交互轨迹 |
 | `POST /captcha/v1/cancel` | 公开 | 取消并释放题目 |
+| `POST /captcha/v1/compat` | 当前轮次票据 | 自动化兼容诱饵：标记所属轮次并返回 `BOT_DETECTED`，不提供绕过验证的能力 |
 | `POST /captcha/v1/siteverify` | **Bearer 密钥** | **后端核验并消费 Token** |
 | `GET /health` | 公开 | 服务健康检查 |
 
