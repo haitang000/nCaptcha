@@ -1,4 +1,4 @@
-import { sha256Hex, powPasses } from './hash.js';
+import { createPowChecker } from './hash.js';
 export function abortError() { return new DOMException('验证已取消', 'AbortError'); }
 export function delay(ms, signal) {
   return new Promise((resolve, reject) => {
@@ -29,10 +29,15 @@ export async function solvePow({ prefix, bits, expiresInMs }, workerUrl, signal)
     }
   } catch (err) { if (signal.aborted) throw abortError(); }
   finally { worker?.terminate(); }
+  const passes = createPowChecker(prefix, bits);
   let nonce = 0;
-  while (performance.now() < deadline) {
+  while (nonce <= 0x7fffffff && performance.now() < deadline) {
     const end = Math.min(deadline, performance.now() + 8);
-    do { if (powPasses(sha256Hex(prefix + nonce), bits)) return String(nonce); nonce++; } while (performance.now() < end);
+    do {
+      // 每批检查一次时钟，保留主线程的 8ms 时间片和取消能力。
+      const stop = Math.min(nonce + 128, 0x80000000);
+      for (; nonce < stop; nonce++) if (passes(nonce)) return String(nonce);
+    } while (nonce <= 0x7fffffff && performance.now() < end);
     await delay(0, signal);
   }
   throw new Error('验证计算超时，请重试');

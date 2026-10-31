@@ -1,6 +1,5 @@
 // 从 localhosting 提取的 SHA-256；兼容没有 crypto.subtle 的 HTTP 页面。
-export function sha256Hex(msg) {
-  const K = [
+const K = new Uint32Array([
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
     0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -9,8 +8,12 @@ export function sha256Hex(msg) {
     0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-  ];
-  const bytes = new TextEncoder().encode(msg);
+]);
+const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+const encoder = new TextEncoder();
+
+export function sha256Hex(msg) {
+  const bytes = encoder.encode(msg);
   const bitLen = bytes.length * 8;
   const len = (((bytes.length + 8) >> 6) + 1) * 64;
   const buf = new Uint8Array(len);
@@ -20,7 +23,6 @@ export function sha256Hex(msg) {
   dv.setUint32(len - 8, Math.floor(bitLen / 0x100000000));
   dv.setUint32(len - 4, bitLen >>> 0);
   const w = new Uint32Array(64);
-  const rotr = (x, n) => (x >>> n) | (x << (32 - n));
   let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
   let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19;
   for (let i = 0; i < len; i += 64) {
@@ -42,6 +44,50 @@ export function sha256Hex(msg) {
     h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0;
   }
   return [h0, h1, h2, h3, h4, h5, h6, h7].map((v) => v.toString(16).padStart(8, '0')).join('');
+}
+
+/** PoW 只检查前 28 位；短消息复用单块缓冲区，省去逐次编码、分配和 hex 转换。 */
+export function createPowChecker(prefix, bits) {
+  const bytes = encoder.encode(prefix);
+  const limit = 2 ** (32 - bits);
+  // 浏览器求解器的 nonce 不超过 0x7fffffff（最多十位十进制数字）。
+  if (bytes.length > 45) return nonce => powPasses(sha256Hex(prefix + nonce), bits);
+  const block = new Uint8Array(64);
+  block.set(bytes);
+  const view = new DataView(block.buffer);
+  const w = new Uint32Array(64);
+  let previousLength = 0;
+  return nonce => {
+    let digits = 1;
+    for (let n = nonce; n >= 10; n = Math.floor(n / 10)) digits++;
+    const length = bytes.length + digits;
+    if (length !== previousLength) {
+      block.fill(0, bytes.length);
+      block[length] = 0x80;
+      view.setUint32(60, length * 8);
+      previousLength = length;
+    }
+    for (let i = length - 1, n = nonce; i >= bytes.length; i--) {
+      block[i] = 48 + n % 10;
+      n = Math.floor(n / 10);
+    }
+    for (let j = 0; j < 16; j++) w[j] = view.getUint32(j * 4);
+    for (let j = 16; j < 64; j++) {
+      const s0 = rotr(w[j - 15], 7) ^ rotr(w[j - 15], 18) ^ (w[j - 15] >>> 3);
+      const s1 = rotr(w[j - 2], 17) ^ rotr(w[j - 2], 19) ^ (w[j - 2] >>> 10);
+      w[j] = (w[j - 16] + s0 + w[j - 7] + s1) >>> 0;
+    }
+    let a = 0x6a09e667, b = 0xbb67ae85, c = 0x3c6ef372, d = 0xa54ff53a;
+    let e = 0x510e527f, f = 0x9b05688c, g = 0x1f83d9ab, h = 0x5be0cd19;
+    for (let j = 0; j < 64; j++) {
+      const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const t1 = (h + s1 + ((e & f) ^ (~e & g)) + K[j] + w[j]) >>> 0;
+      const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const t2 = (s0 + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    return ((0x6a09e667 + a) >>> 0) < limit;
+  };
 }
 
 /** 哈希前导零位数是否 ≥ bits。 */

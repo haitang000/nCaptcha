@@ -137,6 +137,8 @@ widget.destroy();
 
 选项：`apiUrl`、`action`（默认 `default`）、`form`（表单元素或选择器）、`assetBaseUrl`、`workerUrl`、`prewarm`（默认 `true`）、自定义 `fetch`。回调为 `onSuccess(token)`、`onError(error)`、`onExpire()`、`onStateChange(state)`。状态为 `idle/loading/verified/error/destroyed`。组件等待服务端规定的最短令牌使用时间后才触发成功。
 
+PoW 默认在挂载时预热；Worker 和主线程回退都复用 SHA-256 单块缓冲区，避免每次尝试重复编码、分配和转换十六进制字符串。题图生成复用每题的 gamma 查表，并采用 PNG level 3 无损压缩。优化不降低 PoW 难度、不缩短安全等待或动效时间；验证耗时仍取决于设备算力、网络和配置。
+
 组件的 CSS、Worker 与弹窗分别归实例管理。默认从组件脚本所在目录加载 CSS 和 Worker；打包器项目应明确设置 `assetBaseUrl`，并将四个构建文件复制到该目录。跨域加载 Worker 可能受浏览器策略限制，组件会回退到分块计算；将 Worker 放在业务页面同源目录可启用后台计算。严格 CSP 需要允许相应脚本、样式、图片 `data:`、API 连接与 Worker 来源；Worker 加载失败仍可回退。
 
 通过容器的 CSS 变量定制外观，例如：

@@ -121,6 +121,7 @@ function chunk(type, data) {
 }
 
 /** RGBA → PNG。逐行用 Paeth 滤波（类型 4），照片上压缩率比不滤波好不少。
+    使用 level 3 无损压缩，避免逐题执行最高等级压缩占用请求时间。
     预测值一律取「原始」字节（本行 x-4 与上一行同位置），PNG 滤波定义如此。 */
 export function encodePng({ w, h, rgba }) {
   const stride = w * 4;
@@ -150,7 +151,7 @@ export function encodePng({ w, h, rgba }) {
   return Buffer.concat([
     PNG_SIG,
     chunk('IHDR', ihdr),
-    chunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
+    chunk('IDAT', zlib.deflateSync(raw, { level: 3 })),
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
@@ -301,8 +302,10 @@ export function obscurePuzzle(pic) {
   // 色阶后量化到 6 级（≈42 步进），再上亮度场、全局抖动和每像素噪声
   const gamma = 0.8 + Math.random() * 0.4;
   const bright = Math.round((Math.random() - 0.5) * 24);
+  // 每题只有 256 种通道输入；预计算保持相同的浮点值和随机噪声分布。
+  const gammaValues = Float64Array.from({ length: 256 }, (_, value) => Math.pow(value / 255, gamma) * 255);
   const quant = (v, mul) => {
-    let x = Math.pow(v / 255, gamma) * 255 * mul;
+    let x = gammaValues[v] * mul;
     x = Math.round(x / 42) * 42;
     return clamp255(x + bright + Math.round((Math.random() - 0.5) * 36));
   };
