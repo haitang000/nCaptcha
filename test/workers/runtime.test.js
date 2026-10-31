@@ -40,6 +40,21 @@ async function solve(ip, action = 'login') {
   assert.equal(response.status, 200, await response.clone().text());
   return response.json();
 }
+
+test('真实 workerd 的 PoW 和图片挑战阶段均拒绝 agent 蜜罐并消费本轮凭证', async () => {
+  const ip = '192.0.2.40';
+  const pow = await (await get('/captcha/v1/pow?action=login', ip)).json();
+  const input = { action: 'login', pow: { prefix: pow.prefix, nonce: nonceFor(pow) } };
+  const response = await post('/verify', { ...input, agentSignal: 'automated-agent' }, ip);
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { code: 'BOT_DETECTED', bot: true, error: '已检测到自动化代理，验证被拒绝' });
+  assert.equal((await (await post('/verify', input, ip)).json()).code, 'POW_INVALID');
+  const challenge = await issue(ip);
+  const rejected = await post('/challenge', { action: 'login', id: challenge.id, angle: 0, agentSignal: 'automated-agent' }, ip);
+  assert.equal(rejected.status, 403); assert.equal((await rejected.json()).bot, true);
+  const replay = await post('/challenge', { action: 'login', id: challenge.id, angle: 0 }, ip);
+  assert.equal((await replay.json()).code, 'CHALLENGE_EXPIRED');
+});
 test('真实 workerd 严格挑战、图片 PNG、原子并发消费和重放', async () => {
   const ip = '192.0.2.1';
   const challenge = await issue(ip);

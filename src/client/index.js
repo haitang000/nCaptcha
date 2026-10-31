@@ -1,6 +1,7 @@
 import { createTracking, createChallengeTracking } from './tracking.js';
 import { isRotationKey, keyboardAngle } from './keyboard.js';
 import { solvePow, delay, abortError } from './pow.js';
+import { createAgentTrap } from './agent-trap.js';
 import logo from './logo.svg';
 
 const defaultAssets = new URL('./', import.meta.url).href;
@@ -31,6 +32,10 @@ export function render(container, options = {}) {
   let controller = new AbortController(), task = null, prepared = null, proofTask = null, token = null, expiresAt = 0, expiryTimer = null, dialog = null, cancelPuzzle = null, challengeId = null, destroyed = false;
   const notify = (name, ...args) => { try { options[name]?.(...args); } catch (err) { console.error('[captcha] 回调异常', err); } };
   const motion = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const agentSignal = createAgentTrap(host, lifetime.signal, () => {
+    clearTimeout(expiryTimer); expiryTimer = null; token = null; expiresAt = 0;
+    state('error', '已标记为机器人', '已检测到自动化代理，验证被拒绝');
+  });
   function state(value, text, error = '') {
     if (destroyed) return;
     const from = button.getBoundingClientRect().width;
@@ -58,8 +63,9 @@ export function render(container, options = {}) {
     });
     try {
       const pending = (async () => {
+        const agent = body !== undefined && ['/verify', '/challenge'].includes(path) ? agentSignal() : '';
         const response = await (options.fetch ?? fetch)(apiUrl + path, { method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', signal: transport.signal,
-          headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify({ ...body, action }) });
+          headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify({ ...body, ...(agent ? { agentSignal: agent } : {}), action }) });
         const data = await response.json();
         if (!response.ok) throw new CaptchaClientError(data.error || '验证请求失败', data.code, { status: response.status, triesRemaining: data.triesRemaining, retryAfterMs: data.retryAfterMs });
         return { ...data, roundTripMs: performance.now() - started };
@@ -262,7 +268,7 @@ export function render(container, options = {}) {
     clearTimeout(expiryTimer); expiryTimer = null; token = null; expiresAt = 0; prepared = null; proofTask = null; task = null;
     state('idle', '我不是机器人');
   }
-  function getToken() { if (token && performance.now() >= expiresAt) { reset(); notify('onExpire'); } return token; }
+  function getToken() { if (agentSignal()) return null; if (token && performance.now() >= expiresAt) { reset(); notify('onExpire'); } return token; }
   function verify() {
     if (destroyed) return Promise.reject(new CaptchaClientError('组件已销毁', 'DESTROYED'));
     if (getToken()) return Promise.resolve(token);
@@ -279,6 +285,7 @@ export function render(container, options = {}) {
         if (!result) { state('idle', '我不是机器人'); return null; }
         const until = result.tokenExpiresAt;
         await delay(Math.max(0, result.tokenUsableAt - performance.now()), signal);
+        if (agentSignal()) throw new CaptchaClientError('已检测到自动化代理，验证被拒绝', 'BOT_DETECTED');
         if (until <= performance.now()) throw new CaptchaClientError('令牌已过期，请重新验证', 'TOKEN_EXPIRED');
         token = result.token; expiresAt = until;
         expiryTimer = setTimeout(() => { reset(); notify('onExpire'); }, Math.max(1, until - performance.now()));

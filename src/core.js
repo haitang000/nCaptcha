@@ -19,6 +19,11 @@ function zeroBits(bytes) {
   for (const byte of bytes) { if (!byte) n += 8; else { n += Math.clz32(byte) - 24; break; } }
   return n;
 }
+function hasAgentSignal(input) {
+  if (input.agentSignal === undefined) return false;
+  if (typeof input.agentSignal !== 'string' || input.agentSignal.length > 64) throw invalid('agentSignal 需为不超过 64 位的字符串');
+  return input.agentSignal.length > 0;
+}
 export function validateContext({ ip, action = 'default' } = {}) {
   if (typeof ip !== 'string' || !isIP(ip)) throw invalid('ip 必须是有效的 IPv4 或 IPv6 地址');
   if (typeof action !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(action)) throw invalid('action 需为 1–64 位字母、数字或 _ . : -');
@@ -110,25 +115,31 @@ export function createCaptchaCore(options = {}, loadPictures) {
     },
     async verifyBehavior(input) {
       const ctx = context(input); await throttle(ctx.ip);
-      if (!config.enabled) return mint(ctx);
+      const agentDetected = hasAgentSignal(input);
+      if (!config.enabled && !agentDetected) return mint(ctx);
+      if (!config.enabled) { await reputation(ctx.ip, true); throw new CaptchaError('BOT_DETECTED', '已检测到自动化代理，验证被拒绝', 403, { bot: true }); }
       const { pow, trajectory = null, formBehavior = null, hints = null } = input;
       if (!pow || typeof pow.prefix !== 'string' || !/^[a-f0-9]{32}$/.test(pow.prefix) || typeof pow.nonce !== 'string' || !/^\d{1,32}$/.test(pow.nonce)) throw invalid('PoW 数据格式不正确');
       const accepted = await store.update(key('pow', pow.prefix), record => ({
         value: undefined, result: !!record && same(record, ctx) && zeroBits(crypto.createHash('sha256').update(pow.prefix + pow.nonce).digest()) >= record.bits,
       }));
       if (!accepted) { await reputation(ctx.ip, true); throw new CaptchaError('POW_INVALID', '计算凭证无效或已过期，请重新验证'); }
+      // 先消费已绑定的 PoW；去掉蜜罐字段也不能重放本轮凭证。
+      if (agentDetected) { await reputation(ctx.ip, true); throw new CaptchaError('BOT_DETECTED', '已检测到自动化代理，验证被拒绝', 403, { bot: true }); }
       if (!validSignals(trajectory, formBehavior, hints)) { await reputation(ctx.ip, true); throw invalid(); }
       // 行为数据全部由客户端自报，不能单独作为签发凭据；normal 保留为兼容别名。
       return challenge(ctx);
     },
     async solveChallenge(input) {
       const ctx = context(input); await throttle(ctx.ip);
+      const agentDetected = hasAgentSignal(input);
       const { id, angle, pointer = 'mouse', trajectory = null, hints = null, keyboard = null } = input;
       if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id) || !Number.isFinite(angle) || Math.abs(angle) > 360000 || !['mouse', 'touch', 'pen', 'keyboard'].includes(pointer)) throw invalid();
-      if (!validSignals(trajectory, null, hints)) { await reputation(ctx.ip, true); throw invalid(); }
+      if (!agentDetected && !validSignals(trajectory, null, hints)) { await reputation(ctx.ip, true); throw invalid(); }
       const result = await store.update(key('challenge', id), record => {
         if (!record) return { result: { code: 'CHALLENGE_EXPIRED' } };
         if (!same(record, ctx)) return { result: { code: 'BINDING_MISMATCH', releaseIp: record.ip } };
+        if (agentDetected) return { result: { code: 'BOT_DETECTED', releaseIp: record.ip } };
         if (now() - record.createdAt < config.minSolveMs) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'TOO_FAST', retryAfterMs: config.minSolveMs - (now() - record.createdAt) } };
         const tolerance = config.tolerance;
         const elapsedMs = now() - record.createdAt;
@@ -142,6 +153,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
       if (!result.success) {
         // 正常松手可能早于最低等待时间；保留限流，但不把等待重试记作验证失败。
         if (result.code !== 'TOO_FAST') await reputation(ctx.ip, true);
+        if (result.code === 'BOT_DETECTED') throw new CaptchaError('BOT_DETECTED', '已检测到自动化代理，验证被拒绝', 403, { bot: true });
         const message = { ANGLE_INCORRECT: '方向还未回正，请微调后重试', BEHAVIOR_REJECTED: '操作轨迹异常，请重新拖动完成验证', TOO_FAST: '请稍等再提交' }[result.code] ?? '挑战无效或已过期，请重新验证';
         throw new CaptchaError(result.code, message, 400, { triesRemaining: result.triesRemaining, retryAfterMs: result.retryAfterMs });
       }

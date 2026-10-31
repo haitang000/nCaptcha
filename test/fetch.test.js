@@ -5,6 +5,19 @@ import { fixture, nonceFor, challengeTrajectory } from './helpers.js';
 
 const secret = 'worker-secret-for-backend-only-1234567';
 const context = { ip: '192.0.2.4', action: 'login' };
+test('Web 适配器透传 agent 蜜罐字段并返回 403 机器人标记', async t => {
+  const f = fixture(); t.after(() => f.close());
+  const handle = createFetchHandler(f.captcha, { getIp: () => context.ip });
+  const pow = await f.captcha.createPow(context);
+  const response = await handle(new Request('https://captcha.example/captcha/v1/verify', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: context.action, pow: { prefix: pow.prefix, nonce: nonceFor(pow) }, agentSignal: 'automated-agent' }),
+  }));
+  assert.equal(response.status, 403);
+  const body = await response.json();
+  assert.equal(body.code, 'BOT_DETECTED'); assert.equal(body.bot, true); assert.equal(body.token, undefined);
+});
+
 test('Web Request/Response 适配器执行严格验证和受保护的核验', async t => {
   const f = fixture(); t.after(() => f.close());
   const handle = createFetchHandler(f.captcha, { secret, allowedOrigins: ['https://app.example'], getIp: () => context.ip });

@@ -2,6 +2,8 @@
 export type Mode = 'normal' | 'strict';
 export type Pointer = 'mouse' | 'touch' | 'pen' | 'keyboard';
 export interface Context { ip: string; action?: string }
+/** 隐藏 DOM 蜜罐字段；非空表示自动化代理，返回 BOT_DETECTED 并拒绝本次验证。 */
+export interface AgentSignal { agentSignal?: string }
 export interface Point { x: number; y: number; t: number }
 export interface KeyboardBehavior { startAngle: number; events: { key: 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' | 'PageUp' | 'PageDown' | 'Home' | 'End' | 'Enter'; control: 'range' | 'stage'; t: number }[] }
 export interface FormBehavior { totalMs: number; focusOrder: string[]; fields: Record<string, { n: number; meanGap: number; varGap: number }> }
@@ -38,9 +40,9 @@ export interface CaptchaOptions {
 }
 export interface CaptchaInstance {
   createPow(context: Context): Promise<Pow>;
-  verifyBehavior(input: Context & { pow?: { prefix: string; nonce: string }; trajectory?: Point[] | null; formBehavior?: FormBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
+  verifyBehavior(input: Context & AgentSignal & { pow?: { prefix: string; nonce: string }; trajectory?: Point[] | null; formBehavior?: FormBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
   /** 指针操作需本轮轨迹；键盘操作还需可重放到提交角度的 keyboard 记录。 */
-  solveChallenge(input: Context & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult>;
+  solveChallenge(input: Context & AgentSignal & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult>;
   cancelChallenge(input: Context & { id: string }): Promise<boolean>;
   consumeToken(input: Context & { token: string }): Promise<boolean>;
   setMode(mode: Mode): void;

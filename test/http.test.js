@@ -30,6 +30,16 @@ test('HTTP 完整严格验证 → 等待 → 后端带密钥核验 → 重放失
   assert.equal((await (await f.post('/siteverify', verifyBody, headers)).json()).success, true);
   assert.equal((await (await f.post('/siteverify', verifyBody, headers)).json()).success, false);
 });
+
+test('HTTP 透传 agent 蜜罐字段并返回机器人标记，不返回令牌', async t => {
+  const f = await serverFor(t);
+  const pow = await (await fetch(f.base + '/captcha/v1/pow?action=login')).json();
+  const input = { action: 'login', pow: { prefix: pow.prefix, nonce: nonceFor(pow) }, agentSignal: 'automated-agent' };
+  const response = await f.post('/verify', input);
+  assert.equal(response.status, 403);
+  const body = await response.json();
+  assert.equal(body.code, 'BOT_DETECTED'); assert.equal(body.bot, true); assert.equal(body.token, undefined);
+});
 test('来源白名单、预检、核验不向浏览器开放、配置不泄露密钥', async t => {
   const f = await serverFor(t);
   const good = { Origin: 'https://business.example' };

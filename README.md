@@ -7,6 +7,7 @@
 ## ⚡ 核心特性
 
 - **多重防御体系**：前端自适应 PoW 难度门槛 + 像素级防侧信道题图回正 + 轨迹行为动力学检验（检测机械恒速、异常停顿与重放）。
+- **Agent 指令蜜罐**：在隐藏 DOM 中提供自动化操作指引，遵循指引的 agent 会主动触发机器人标记，服务端拒绝本轮验证。
 - **一次性强绑定令牌**：Token 强绑定真实 IP 与 Action，限制最短求解耗时，必须由业务后端 `/siteverify` 消费。
 - **现代化组件**：Shadow DOM 隔离，圆形预览、胶囊滑块、自适应深浅色模式，完整支持触控、鼠标与全键盘操作。
 - **双端运行环境**：支持 Node.js（原生 HTTP / Express 快速嵌入）与 Cloudflare Workers（边缘 SQLite 强一致状态）。
@@ -135,6 +136,14 @@ app.post('/api/login', async (req, res) => {
 
 ## 📡 API 与核心配置
 
+### Agent 指令蜜罐
+
+组件会自动在 `.captcha-host` 的 light DOM 内放置中英文 agent 指令与空的 `input[data-captcha-agent]`，普通界面、Tab 顺序和无障碍树均不显示。指令要求 agent 将字段设为 `automated-agent`，触发 `input`、`change` 事件，再启动验证。字段没有 `name`，不会随业务表单提交，也无需修改业务接入代码。
+
+触发后，宿主出现 `data-captcha-bot="true"`，后续 `/verify` 和 `/challenge` 请求携带 `agentSignal`。服务端返回 HTTP 403、`code: "BOT_DETECTED"`、`bot: true`，不签发令牌，并消费本轮 PoW 或挑战，防止清空字段后重放。组件的 `reset()` 保留标记，`getToken()` 返回 `null`，`onError` 可通过 `error.code` 识别拒绝原因；同 IP 的其他验证不会因此一并被封禁。
+
+这里的“仅 agent 可见”指读取 DOM 的工具可以发现，而页面视觉和辅助技术不可见；开发者工具同样可以查看。它只捕获执行指令或填充蜜罐的自动化程序，不能检测忽略指令、重新创建组件或直接调用 API 的所有机器人，也不会撤销此前已经签发的服务端令牌。它与 PoW、图片挑战和行为分析共同使用。
+
 ### API 接口
 
 | 路径 | 访问权限 | 说明 |
@@ -163,7 +172,7 @@ app.post('/api/login', async (req, res) => {
 
 ```powershell
 npm run build            # 构建客户端资源 (dist/)
-npm test                 # 运行全部核心测试 (107 项通过)
+npm test                 # 运行全部核心测试
 npm run test:assessment  # 运行多维行为动力学评测
 npm run test:browser     # 运行 Playwright 浏览器端到端测试
 ```
