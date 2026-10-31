@@ -478,10 +478,9 @@ var Captcha = (() => {
       const receivedAt = performance.now();
       return { ...result, tokenExpiresAt: receivedAt + result.expiresInMs - (result.roundTripMs ?? 0), tokenUsableAt: receivedAt + result.usableAfterMs };
     }
-    function prepareProof() {
+    function prepareProof(signal = controller.signal) {
       if (prepared && prepared.deadline > performance.now() + 1e3) return Promise.resolve(prepared.pow);
       if (proofTask) return proofTask;
-      const signal = controller.signal;
       const job = (async () => {
         const proof = await request(`/pow?action=${encodeURIComponent(action)}`, void 0, signal);
         const deadline = performance.now() + proof.expiresInMs - proof.roundTripMs;
@@ -515,12 +514,12 @@ var Captcha = (() => {
         dlg.setAttribute("aria-labelledby", titleId);
         const helpId = `${titleId}-help`;
         dlg.innerHTML = `<p class="puzzle-eyebrow" role="status">\u8BF7\u8FDB\u884C\u5B89\u5168\u9A8C\u8BC1</p><h3 id="${titleId}" tabindex="-1">\u62D6\u52A8\u6ED1\u5757, \u4F7F\u56FE\u7247\u65B9\u5411\u4E3A<strong>\u6B63</strong></h3>
-        <div class="stage" tabindex="0" role="slider" aria-label="\u65CB\u8F6C\u56FE\u7247" aria-describedby="${helpId}" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 \u5EA6">
+        <div class="stage-viewport"><div class="stage" tabindex="0" role="slider" aria-label="\u65CB\u8F6C\u56FE\u7247" aria-describedby="${helpId}" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 \u5EA6">
           <img alt="\u65CB\u8F6C\u9A8C\u8BC1\u56FE\u7247" draggable="false"><span class="stage-spinner" aria-hidden="true"></span>
           <span class="stage-result" aria-hidden="true"><svg viewBox="0 0 64 64"><path class="stage-check" pathLength="1" d="M16 33 28 45 49 21"/><path class="stage-cross" pathLength="1" d="m22 22 20 20 m0-20-20 20"/></svg></span>
-        </div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="\u65CB\u8F6C\u56FE\u7247\u89D2\u5EA6" aria-describedby="${helpId}"><p id="${helpId}" class="sr-only">\u62D6\u52A8\u6ED1\u5757\uFF0C\u677E\u5F00\u540E\u9A8C\u8BC1\u3002\u4E5F\u53EF\u7528\u65B9\u5411\u952E\u5FAE\u8C03\uFF0C\u6309 Enter \u786E\u8BA4\uFF1B\u6309 Escape \u6216\u70B9\u51FB\u5F39\u7A97\u5916\u53D6\u6D88\u3002</p><div class="error-text" role="alert"></div><button type="button" class="puzzle-cancel" data-cancel aria-label="\u53D6\u6D88\u9A8C\u8BC1">\u53D6\u6D88</button>`;
+        </div></div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="\u65CB\u8F6C\u56FE\u7247\u89D2\u5EA6" aria-describedby="${helpId}"><p id="${helpId}" class="sr-only">\u62D6\u52A8\u6ED1\u5757\uFF0C\u677E\u5F00\u540E\u9A8C\u8BC1\u3002\u4E5F\u53EF\u7528\u65B9\u5411\u952E\u5FAE\u8C03\uFF0C\u6309 Enter \u786E\u8BA4\uFF1B\u6309 Escape \u6216\u70B9\u51FB\u5F39\u7A97\u5916\u53D6\u6D88\u3002</p><div class="error-text" role="alert"></div><button type="button" class="puzzle-cancel" data-cancel aria-label="\u53D6\u6D88\u9A8C\u8BC1">\u53D6\u6D88</button>`;
         root.append(dlg);
-        const stage = dlg.querySelector(".stage"), img = dlg.querySelector("img"), range = dlg.querySelector(".range"), eyebrow = dlg.querySelector(".puzzle-eyebrow"), errEl = dlg.querySelector(".error-text");
+        const viewport = dlg.querySelector(".stage-viewport"), stage = dlg.querySelector(".stage"), img = dlg.querySelector("img"), range = dlg.querySelector(".range"), eyebrow = dlg.querySelector(".puzzle-eyebrow"), errEl = dlg.querySelector(".error-text");
         img.src = challenge.image;
         let deg = 0, drag = null, settled = false, submitting = false, keyboardAdjusting = false, rangeCancelled = false;
         const events = new AbortController();
@@ -531,17 +530,32 @@ var Captcha = (() => {
           events.abort();
           signal.removeEventListener("abort", aborted);
           clearTimeout(challengeTimer);
-          cancelPuzzle = null;
-          dialog = null;
           if (challengeId === challenge.id) challengeId = null;
           if (!value) releaseChallenge(challenge.id);
           for (const animation of dlg.getAnimations?.({ subtree: true }) ?? []) animation.cancel();
-          if (dlg.open) dlg.close();
-          dlg.remove();
-          error ? reject(error) : resolve(value);
+          const remove = () => {
+            if (dlg.open) dlg.close();
+            dlg.remove();
+            if (dialog === dlg) {
+              dialog = null;
+              cancelPuzzle = null;
+            }
+            error ? reject(error) : resolve(value);
+          };
+          if (!dlg.open) {
+            remove();
+            return;
+          }
+          dlg.inert = true;
+          dlg.classList.add("is-closing");
+          const exiting = dlg.getAnimations?.() ?? [];
+          if (exiting.length) void Promise.allSettled(exiting.map((animation) => animation.finished)).then(remove);
+          else if (motion()) setTimeout(remove, 160);
+          else remove();
         };
         const aborted = () => finish(null, abortError());
-        const challengeTimer = setTimeout(() => finish(null, new CaptchaClientError("\u56FE\u7247\u6311\u6218\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u9A8C\u8BC1", "CHALLENGE_EXPIRED")), Math.max(1, challenge.expiresInMs));
+        const expireChallenge = () => finish(null, new CaptchaClientError("\u56FE\u7247\u6311\u6218\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u9A8C\u8BC1", "CHALLENGE_EXPIRED"));
+        let challengeTimer = setTimeout(expireChallenge, Math.max(1, challenge.expiresInMs));
         cancelPuzzle = () => finish(null);
         signal.addEventListener("abort", aborted, { once: true });
         function paint(value) {
@@ -554,6 +568,65 @@ var Captcha = (() => {
           stage.setAttribute("aria-valuetext", `${Math.round(deg) % 360} \u5EA6`);
           errEl.textContent = "";
           dlg.classList.remove("has-error");
+        }
+        async function nextRound() {
+          eyebrow.textContent = "\u6B63\u5728\u66F4\u6362\u56FE\u7247\u2026";
+          dlg.setAttribute("aria-busy", "true");
+          const [, pow] = await Promise.all([request("/cancel", { id: challenge.id }, events.signal), prepareProof(events.signal)]);
+          prepared = null;
+          const response = await request("/verify", { pow }, events.signal);
+          const next = response.challenge;
+          if (!next || !/^[a-f0-9]{32}$/.test(next.id) || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(next.image) || !Number.isFinite(next.expiresInMs) || next.expiresInMs <= 0) throw new CaptchaClientError("\u670D\u52A1\u7AEF\u8FD4\u56DE\u4E86\u4E0D\u6B63\u786E\u7684\u56FE\u7247\u6311\u6218");
+          if (settled) {
+            releaseChallenge(next.id);
+            return;
+          }
+          challenge = next;
+          challengeId = next.id;
+          challengeTimer = setTimeout(expireChallenge, Math.max(1, next.expiresInMs - response.roundTripMs));
+          const preload = new Image();
+          preload.src = next.image;
+          await preload.decode();
+          if (settled) return;
+          const outgoing = stage.cloneNode(true);
+          outgoing.className = "stage-outgoing";
+          outgoing.removeAttribute("tabindex");
+          outgoing.removeAttribute("role");
+          outgoing.setAttribute("aria-hidden", "true");
+          outgoing.inert = true;
+          viewport.append(outgoing);
+          img.src = next.image;
+          img.style.transform = "rotate(0deg)";
+          deg = 0;
+          range.value = "0";
+          range.setAttribute("aria-valuetext", "0 \u5EA6");
+          stage.setAttribute("aria-valuenow", "0");
+          stage.setAttribute("aria-valuetext", "0 \u5EA6");
+          stage.dataset.phase = "switching";
+          errEl.textContent = "";
+          dlg.classList.remove("has-error");
+          const animations = [];
+          try {
+            if (motion() && stage.animate) {
+              const distance = viewport.clientWidth, timing = { duration: 260, easing: "cubic-bezier(.65,0,.35,1)", fill: "both" };
+              animations.push(outgoing.animate([{ transform: "translateX(0)" }, { transform: `translateX(-${distance}px)` }], timing));
+              animations.push(stage.animate([{ transform: `translateX(${distance}px)` }, { transform: "translateX(0)" }], timing));
+              await Promise.allSettled(animations.map((animation) => animation.finished));
+            }
+          } finally {
+            for (const animation of animations) animation.cancel();
+            outgoing.remove();
+          }
+          if (settled) return;
+          submitting = false;
+          keyboardAdjusting = false;
+          rangeCancelled = false;
+          range.disabled = false;
+          stage.removeAttribute("aria-disabled");
+          delete stage.dataset.phase;
+          dlg.removeAttribute("aria-busy");
+          eyebrow.textContent = "\u8BF7\u8FDB\u884C\u5B89\u5168\u9A8C\u8BC1";
+          range.focus({ preventScroll: true });
         }
         async function submit() {
           if (submitting || settled || signal.aborted) return;
@@ -602,11 +675,9 @@ var Captcha = (() => {
             await Promise.allSettled(drawing.map((animation) => animation.finished));
             if (settled) return;
             await delay(drawing.length ? 180 : motion() ? feedbackMs : 300, events.signal);
-            dlg.classList.add("is-closing");
-            const exiting = dlg.getAnimations?.() ?? [];
-            if (exiting.length) await Promise.allSettled(exiting.map((animation) => animation.finished));
-            else await delay(exitMs, events.signal);
-            if (!settled) finish(result, failure);
+            if (settled) return;
+            if (failure && ["ANGLE_INCORRECT", "CHALLENGE_EXHAUSTED", "CHALLENGE_EXPIRED"].includes(failure.code)) await nextRound();
+            else finish(result, failure);
           } catch (error) {
             if (!settled) finish(null, error);
           }
@@ -721,6 +792,7 @@ var Captcha = (() => {
           let result = await request("/verify", { pow, trajectory: tracking.getTrajectory(), formBehavior: tracking.getFormBehavior(), hints: tracking.getHints() }, signal);
           if (signal.aborted) throw abortError();
           result = result.challenge ? await puzzle(result.challenge, signal) : prepareToken(result);
+          if (signal.aborted) throw abortError();
           if (!result) {
             state("idle", "\u6211\u4E0D\u662F\u673A\u5668\u4EBA");
             return null;

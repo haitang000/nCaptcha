@@ -53,10 +53,9 @@ export function render(container, options = {}) {
     const receivedAt = performance.now();
     return { ...result, tokenExpiresAt: receivedAt + result.expiresInMs - (result.roundTripMs ?? 0), tokenUsableAt: receivedAt + result.usableAfterMs };
   }
-  function prepareProof() {
+  function prepareProof(signal = controller.signal) {
     if (prepared && prepared.deadline > performance.now() + 1000) return Promise.resolve(prepared.pow);
     if (proofTask) return proofTask;
-    const signal = controller.signal;
     const job = (async () => {
       const proof = await request(`/pow?action=${encodeURIComponent(action)}`, undefined, signal);
       const deadline = performance.now() + proof.expiresInMs - proof.roundTripMs;
@@ -79,27 +78,38 @@ export function render(container, options = {}) {
       dlg.setAttribute('aria-labelledby', titleId);
       const helpId = `${titleId}-help`;
       dlg.innerHTML = `<p class="puzzle-eyebrow" role="status">请进行安全验证</p><h3 id="${titleId}" tabindex="-1">拖动滑块, 使图片方向为<strong>正</strong></h3>
-        <div class="stage" tabindex="0" role="slider" aria-label="旋转图片" aria-describedby="${helpId}" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 度">
+        <div class="stage-viewport"><div class="stage" tabindex="0" role="slider" aria-label="旋转图片" aria-describedby="${helpId}" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 度">
           <img alt="旋转验证图片" draggable="false"><span class="stage-spinner" aria-hidden="true"></span>
           <span class="stage-result" aria-hidden="true"><svg viewBox="0 0 64 64"><path class="stage-check" pathLength="1" d="M16 33 28 45 49 21"/><path class="stage-cross" pathLength="1" d="m22 22 20 20 m0-20-20 20"/></svg></span>
-        </div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="旋转图片角度" aria-describedby="${helpId}"><p id="${helpId}" class="sr-only">拖动滑块，松开后验证。也可用方向键微调，按 Enter 确认；按 Escape 或点击弹窗外取消。</p><div class="error-text" role="alert"></div><button type="button" class="puzzle-cancel" data-cancel aria-label="取消验证">取消</button>`;
+        </div></div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="旋转图片角度" aria-describedby="${helpId}"><p id="${helpId}" class="sr-only">拖动滑块，松开后验证。也可用方向键微调，按 Enter 确认；按 Escape 或点击弹窗外取消。</p><div class="error-text" role="alert"></div><button type="button" class="puzzle-cancel" data-cancel aria-label="取消验证">取消</button>`;
       root.append(dlg);
-      const stage = dlg.querySelector('.stage'), img = dlg.querySelector('img'), range = dlg.querySelector('.range'), eyebrow = dlg.querySelector('.puzzle-eyebrow'), errEl = dlg.querySelector('.error-text');
+      const viewport = dlg.querySelector('.stage-viewport'), stage = dlg.querySelector('.stage'), img = dlg.querySelector('img'), range = dlg.querySelector('.range'), eyebrow = dlg.querySelector('.puzzle-eyebrow'), errEl = dlg.querySelector('.error-text');
       img.src = challenge.image;
       let deg = 0, drag = null, settled = false, submitting = false, keyboardAdjusting = false, rangeCancelled = false;
       const events = new AbortController();
       const listen = (el, type, fn) => el.addEventListener(type, fn, { signal: events.signal });
       const finish = (value, error) => {
         if (settled) return; settled = true; events.abort(); signal.removeEventListener('abort', aborted);
-        clearTimeout(challengeTimer); cancelPuzzle = null; dialog = null;
+        clearTimeout(challengeTimer);
         if (challengeId === challenge.id) challengeId = null;
         if (!value) releaseChallenge(challenge.id);
         for (const animation of dlg.getAnimations?.({ subtree: true }) ?? []) animation.cancel();
-        if (dlg.open) dlg.close(); dlg.remove();
-        error ? reject(error) : resolve(value);
+        // 保持 dialog 在顶层，等卡片与遮罩退场后再真正关闭。
+        const remove = () => {
+          if (dlg.open) dlg.close(); dlg.remove();
+          if (dialog === dlg) { dialog = null; cancelPuzzle = null; }
+          error ? reject(error) : resolve(value);
+        };
+        if (!dlg.open) { remove(); return; }
+        dlg.inert = true; dlg.classList.add('is-closing');
+        const exiting = dlg.getAnimations?.() ?? [];
+        if (exiting.length) void Promise.allSettled(exiting.map(animation => animation.finished)).then(remove);
+        else if (motion()) setTimeout(remove, 160);
+        else remove();
       };
       const aborted = () => finish(null, abortError());
-      const challengeTimer = setTimeout(() => finish(null, new CaptchaClientError('图片挑战已过期，请重新验证', 'CHALLENGE_EXPIRED')), Math.max(1, challenge.expiresInMs));
+      const expireChallenge = () => finish(null, new CaptchaClientError('图片挑战已过期，请重新验证', 'CHALLENGE_EXPIRED'));
+      let challengeTimer = setTimeout(expireChallenge, Math.max(1, challenge.expiresInMs));
       cancelPuzzle = () => finish(null);
       signal.addEventListener('abort', aborted, { once: true });
       function paint(value) {
@@ -109,6 +119,46 @@ export function render(container, options = {}) {
         range.setAttribute('aria-valuetext', `${Math.round(deg) % 360} 度`);
         stage.setAttribute('aria-valuenow', String(Math.round(deg) % 360)); stage.setAttribute('aria-valuetext', `${Math.round(deg) % 360} 度`);
         errEl.textContent = ''; dlg.classList.remove('has-error');
+      }
+      async function nextRound() {
+        eyebrow.textContent = '正在更换图片…'; dlg.setAttribute('aria-busy', 'true');
+        // 先释放旧题占用的名额，再出新题；重新计算 PoW，沿用服务端的限流与风控。
+        const [, pow] = await Promise.all([request('/cancel', { id: challenge.id }, events.signal), prepareProof(events.signal)]);
+        prepared = null;
+        const response = await request('/verify', { pow }, events.signal);
+        const next = response.challenge;
+        if (!next || !/^[a-f0-9]{32}$/.test(next.id) || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(next.image) || !Number.isFinite(next.expiresInMs) || next.expiresInMs <= 0) throw new CaptchaClientError('服务端返回了不正确的图片挑战');
+        if (settled) { releaseChallenge(next.id); return; }
+        challenge = next; challengeId = next.id;
+        challengeTimer = setTimeout(expireChallenge, Math.max(1, next.expiresInMs - response.roundTripMs));
+        // 解码完成后再换图，避免新图片滑入时出现空白。
+        const preload = new Image(); preload.src = next.image;
+        await preload.decode();
+        if (settled) return;
+        const outgoing = stage.cloneNode(true);
+        outgoing.className = 'stage-outgoing'; outgoing.removeAttribute('tabindex'); outgoing.removeAttribute('role'); outgoing.setAttribute('aria-hidden', 'true'); outgoing.inert = true;
+        viewport.append(outgoing);
+        img.src = next.image; img.style.transform = 'rotate(0deg)'; deg = 0;
+        range.value = '0'; range.setAttribute('aria-valuetext', '0 度');
+        stage.setAttribute('aria-valuenow', '0'); stage.setAttribute('aria-valuetext', '0 度'); stage.dataset.phase = 'switching';
+        errEl.textContent = ''; dlg.classList.remove('has-error');
+        const animations = [];
+        try {
+          if (motion() && stage.animate) {
+            const distance = viewport.clientWidth, timing = { duration: 260, easing: 'cubic-bezier(.65,0,.35,1)', fill: 'both' };
+            animations.push(outgoing.animate([{ transform: 'translateX(0)' }, { transform: `translateX(-${distance}px)` }], timing));
+            animations.push(stage.animate([{ transform: `translateX(${distance}px)` }, { transform: 'translateX(0)' }], timing));
+            await Promise.allSettled(animations.map(animation => animation.finished));
+          }
+        } finally {
+          for (const animation of animations) animation.cancel();
+          outgoing.remove();
+        }
+        if (settled) return;
+        submitting = false; keyboardAdjusting = false; rangeCancelled = false;
+        range.disabled = false; stage.removeAttribute('aria-disabled'); delete stage.dataset.phase;
+        dlg.removeAttribute('aria-busy'); eyebrow.textContent = '请进行安全验证';
+        range.focus({ preventScroll: true });
       }
       async function submit() {
         if (submitting || settled || signal.aborted) return;
@@ -143,11 +193,9 @@ export function render(container, options = {}) {
           await Promise.allSettled(drawing.map(animation => animation.finished));
           if (settled) return;
           await delay(drawing.length ? 180 : motion() ? feedbackMs : 300, events.signal);
-          dlg.classList.add('is-closing');
-          const exiting = dlg.getAnimations?.() ?? [];
-          if (exiting.length) await Promise.allSettled(exiting.map(animation => animation.finished));
-          else await delay(exitMs, events.signal);
-          if (!settled) finish(result, failure);
+          if (settled) return;
+          if (failure && ['ANGLE_INCORRECT', 'CHALLENGE_EXHAUSTED', 'CHALLENGE_EXPIRED'].includes(failure.code)) await nextRound();
+          else finish(result, failure);
         } catch (error) {
           if (!settled) finish(null, error);
         }
@@ -195,6 +243,7 @@ export function render(container, options = {}) {
         let result = await request('/verify', { pow, trajectory: tracking.getTrajectory(), formBehavior: tracking.getFormBehavior(), hints: tracking.getHints() }, signal);
         if (signal.aborted) throw abortError();
         result = result.challenge ? await puzzle(result.challenge, signal) : prepareToken(result);
+        if (signal.aborted) throw abortError();
         if (!result) { state('idle', '我不是机器人'); return null; }
         const until = result.tokenExpiresAt;
         await delay(Math.max(0, result.tokenUsableAt - performance.now()), signal);

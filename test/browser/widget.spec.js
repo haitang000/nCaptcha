@@ -165,7 +165,7 @@ test('滑块键盘微调不提前提交，Enter 确认且网络过程中禁止�
   await range.evaluate(el => { el.dispatchEvent(new Event('change')); el.dispatchEvent(new Event('change')); });
   await expect(page.locator('.widget')).toHaveClass(/verified/); expect(requests).toBe(1);
 });
-test('过快松手自动等待，错误反馈后关闭弹窗并可重新验证', async ({ page }) => {
+test('过快松手自动等待，错误反馈后保留弹窗并开始下一轮', async ({ page }) => {
   let requests = 0;
   await page.route('**/captcha/v1/challenge', async route => {
     requests++;
@@ -176,12 +176,15 @@ test('过快松手自动等待，错误反馈后关闭弹窗并可重新验证',
   await mount(page);
   await start(page);
   const range = page.locator('.range');
+  const replacement = page.waitForResponse(r => r.url().endsWith('/captcha/v1/verify'));
   await range.evaluate(el => { el.value = '123'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
   await expect.poll(() => page.locator('.stage').getAttribute('data-phase'), { intervals: [20] }).toBe('failure');
   await expect(page.getByRole('alert')).toHaveText('方向还未回正，请微调后重试');
   expect(requests).toBe(2); expect(await range.inputValue()).toBe('123'); await expect(range).toBeDisabled();
-  await expect(page.locator('dialog')).toHaveCount(0); await expect(page.locator('.widget')).toHaveClass(/error/);
-  await answer(page, await start(page)); await expect(page.locator('.widget')).toHaveClass(/verified/);
+  const { challenge } = await (await replacement).json();
+  await expect(range).toBeEnabled(); await expect(range).toHaveValue('0');
+  await expect(page.locator('dialog[open]')).toHaveCount(1); await expect(page.locator('.widget')).toHaveClass(/loading/);
+  await answer(page, challenge); await expect(page.locator('.widget')).toHaveClass(/verified/);
 });
 test('鼠标和触屏实际拖动滑块在松手时只提交一次', async ({ page, isMobile }) => {
   const requests = [];
