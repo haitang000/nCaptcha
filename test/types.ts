@@ -5,7 +5,7 @@ const store: CaptchaStore = createMemoryStore();
 const engine = createCaptcha({ store, mode: 'strict', powBits: 20 });
 createHttpHandler(engine, { secret: 'x'.repeat(32), allowedOrigins: ['https://example.com'] });
 createExpressMiddleware(engine);
-const widget: Widget = render(document.body, { onSuccess(token) { token.toUpperCase(); }, onStateChange(state) { console.log(state); } });
+const widget: Widget = render(document.body, { requestTimeoutMs: 15000, onSuccess(token) { token.toUpperCase(); }, onStateChange(state) { console.log(state); } });
 const context = { ip: '127.0.0.1', action: 'login' };
 const assessment: BehaviorAssessment = assessChallengeBehavior({ angle: 0, pointer: 'keyboard', keyboard: { startAngle: 0, events: [{ key: 'Enter', control: 'range', t: 100 }] } }, { elapsedMs: 200 });
 const passed: boolean = assessment.passed;

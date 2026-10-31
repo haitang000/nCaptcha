@@ -140,7 +140,8 @@ export function createCaptchaCore(options = {}, loadPictures) {
       });
       if (result.releaseIp) await release(result.releaseIp, id);
       if (!result.success) {
-        await reputation(ctx.ip, true);
+        // 正常松手可能早于最低等待时间；保留限流，但不把等待重试记作验证失败。
+        if (result.code !== 'TOO_FAST') await reputation(ctx.ip, true);
         const message = { ANGLE_INCORRECT: '方向还未回正，请微调后重试', BEHAVIOR_REJECTED: '操作轨迹异常，请重新拖动完成验证', TOO_FAST: '请稍等再提交' }[result.code] ?? '挑战无效或已过期，请重新验证';
         throw new CaptchaError(result.code, message, 400, { triesRemaining: result.triesRemaining, retryAfterMs: result.retryAfterMs });
       }

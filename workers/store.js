@@ -5,6 +5,7 @@ export function createDurableStore(storage, { now = Date.now, maxEntries = 10000
   const sql = storage.sql;
   sql.exec('CREATE TABLE IF NOT EXISTS captcha_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER NOT NULL)');
   sql.exec('CREATE INDEX IF NOT EXISTS captcha_expiry ON captcha_state (expires_at)');
+  let alarmTarget, alarmPromise = null, alarmRevision = 0;
   const sweep = () => { sql.exec('DELETE FROM captcha_state WHERE expires_at <= ?', now()); };
   function read(key) {
     const row = sql.exec('SELECT value, expires_at FROM captcha_state WHERE key = ?', key).toArray()[0];
@@ -36,10 +37,25 @@ export function createDurableStore(storage, { now = Date.now, maxEntries = 10000
     },
     async scheduleCleanup() {
       const expires = sql.exec('SELECT MIN(expires_at) AS expires FROM captcha_state').toArray()[0].expires;
-      if (expires === null) { await storage.deleteAlarm(); return; }
+      const target = expires === null ? null : Math.max(now() + 1000, expires);
+      if (alarmTarget === target) return alarmPromise;
       // 查询最早到期项后立即排程，中途不 await，避免并发请求把更早的 alarm 覆盖成较晚时间。
-      await storage.setAlarm(Math.max(now() + 1000, expires));
+      alarmTarget = target;
+      const revision = ++alarmRevision;
+      let pending;
+      try {
+        pending = target === null ? storage.deleteAlarm() : storage.setAlarm(target);
+        alarmPromise = pending;
+        await pending;
+      } catch (error) {
+        if (alarmRevision === revision) { alarmTarget = undefined; alarmPromise = null; }
+        throw error;
+      }
     },
-    async cleanup() { sweep(); await this.scheduleCleanup(); },
+    async cleanup() {
+      // alarm 触发后已被平台消费；重建的存储也从未知状态开始确认排程。
+      alarmTarget = undefined; alarmPromise = null; alarmRevision++;
+      sweep(); await this.scheduleCleanup();
+    },
   };
 }

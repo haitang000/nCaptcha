@@ -2,6 +2,8 @@ export type CaptchaState = 'idle' | 'loading' | 'verified' | 'error' | 'destroye
 export interface WidgetOptions {
   apiUrl?: string; assetBaseUrl?: string; workerUrl?: string; action?: string;
   form?: string | HTMLFormElement; prewarm?: boolean; fetch?: typeof globalThis.fetch;
+  /** 每次 API 请求及响应体读取的超时，默认 15000ms；须为正整数，最大 2147483647。 */
+  requestTimeoutMs?: number;
   onSuccess?: (token: string) => void; onExpire?: () => void;
   onError?: (error: Error) => void; onStateChange?: (state: CaptchaState) => void;
 }

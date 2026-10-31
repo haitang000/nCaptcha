@@ -161,6 +161,10 @@ export function encodePng({ w, h, rgba }) {
  * 结果画布取 w/h 的较大者，画不下的角落留透明。
  */
 export function rotatePixels(pic, deg) {
+  return rotateImage(pic, deg, false);
+}
+
+function rotateImage(pic, deg, circleOnly) {
   const rad = (deg * Math.PI) / 180;
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
@@ -169,10 +173,19 @@ export function rotatePixels(pic, deg) {
   const cx = pic.w / 2;
   const cy = pic.h / 2;
   const c2 = size / 2;
+  const radiusSquared = Math.max(0, c2 - 2) ** 2;
   for (let y = 0; y < size; y++) {
     const dy = y - c2;
-    for (let x = 0; x < size; x++) {
+    const dySquared = dy * dy;
+    if (circleOnly && dySquared > radiusSquared) continue;
+    const halfWidth = circleOnly ? Math.sqrt(radiusSquared - dySquared) : c2;
+    // 边界多取一个像素，再按平方距离精确判断，避免 sqrt 舍入裁掉圆周。
+    const start = circleOnly ? Math.max(0, Math.ceil(c2 - halfWidth) - 1) : 0;
+    const end = circleOnly ? Math.min(size - 1, Math.floor(c2 + halfWidth) + 1) : size - 1;
+    for (let x = start; x <= end; x++) {
       const dx = x - c2;
+      // 输出缓冲区初始全零：外圈不采样，也不会带出隐藏的 RGB 数据。
+      if (circleOnly && dx * dx + dySquared > radiusSquared) continue;
       const sx = cx + dx * cos + dy * sin;
       const sy = cy - dx * sin + dy * cos;
       if (sx < 0 || sy < 0 || sx > pic.w - 1 || sy > pic.h - 1) continue;
@@ -180,6 +193,7 @@ export function rotatePixels(pic, deg) {
       const y0 = Math.floor(sy);
       const fx = sx - x0;
       const fy = sy - y0;
+      const left = 1 - fx, top = 1 - fy;
       const x1 = Math.min(x0 + 1, pic.w - 1);
       const y1 = Math.min(y0 + 1, pic.h - 1);
       const o00 = (y0 * pic.w + x0) * 4;
@@ -189,9 +203,9 @@ export function rotatePixels(pic, deg) {
       const di = (y * size + x) * 4;
       for (let c = 0; c < 4; c++) {
         out[di + c] = Math.round(
-          pic.rgba[o00 + c] * (1 - fx) * (1 - fy) +
-            pic.rgba[o01 + c] * fx * (1 - fy) +
-            pic.rgba[o10 + c] * (1 - fx) * fy +
+          pic.rgba[o00 + c] * left * top +
+            pic.rgba[o01 + c] * fx * top +
+            pic.rgba[o10 + c] * left * fy +
             pic.rgba[o11 + c] * fx * fy
         );
       }
@@ -207,26 +221,29 @@ export function resize(pic, maxSize, enlarge = false) {
   const out = Buffer.alloc(size * size * 4);
   const sx = pic.w / size;
   const sy = pic.h / size;
+  const columns = Array.from({ length: size }, (_, x) => {
+    const fx = x * sx, x0 = Math.min(Math.floor(fx), pic.w - 1);
+    return { x0: x0 * 4, x1: Math.min(x0 + 1, pic.w - 1) * 4, tx: fx - x0 };
+  });
   for (let y = 0; y < size; y++) {
     const fy = y * sy;
     const y0 = Math.min(Math.floor(fy), pic.h - 1);
     const y1 = Math.min(y0 + 1, pic.h - 1);
     const ty = fy - y0;
+    const row0 = y0 * pic.w * 4, row1 = y1 * pic.w * 4;
+    const top = 1 - ty;
     for (let x = 0; x < size; x++) {
-      const fx = x * sx;
-      const x0 = Math.min(Math.floor(fx), pic.w - 1);
-      const x1 = Math.min(x0 + 1, pic.w - 1);
-      const tx = fx - x0;
-      const o00 = (y0 * pic.w + x0) * 4;
-      const o01 = (y0 * pic.w + x1) * 4;
-      const o10 = (y1 * pic.w + x0) * 4;
-      const o11 = (y1 * pic.w + x1) * 4;
+      const { x0, x1, tx } = columns[x], left = 1 - tx;
+      const o00 = row0 + x0;
+      const o01 = row0 + x1;
+      const o10 = row1 + x0;
+      const o11 = row1 + x1;
       const di = (y * size + x) * 4;
       for (let c = 0; c < 4; c++) {
         out[di + c] = Math.round(
-          pic.rgba[o00 + c] * (1 - tx) * (1 - ty) +
-            pic.rgba[o01 + c] * tx * (1 - ty) +
-            pic.rgba[o10 + c] * (1 - tx) * ty +
+          pic.rgba[o00 + c] * left * top +
+            pic.rgba[o01 + c] * tx * top +
+            pic.rgba[o10 + c] * left * ty +
             pic.rgba[o11 + c] * tx * ty
         );
       }
@@ -241,11 +258,7 @@ export function rotateToPng(pic, deg) {
 
 // 客户端只显示圆形区域。发送前清除外圈全部 RGBA，避免方形透明边角泄露旋转角度。
 export function rotatePuzzleToPng(pic, deg) {
-  const image = rotatePixels(pic, deg), center = image.w / 2, radius = Math.max(0, center - 2);
-  for (let y = 0; y < image.h; y++) for (let x = 0; x < image.w; x++) {
-    if ((x - center) ** 2 + (y - center) ** 2 > radius ** 2) image.rgba.fill(0, (y * image.w + x) * 4, (y * image.w + x) * 4 + 4);
-  }
-  return encodePng(image);
+  return encodePng(rotateImage(pic, deg, true));
 }
 
 const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
@@ -268,43 +281,34 @@ export function obscurePuzzle(pic) {
 
   const cropped = Buffer.alloc(cw * ch * 4);
   for (let y = 0; y < ch; y++) {
-    for (let x = 0; x < cw; x++) {
-      const si = ((oy + y) * size + ox + x) * 4;
-      const di = (y * cw + x) * 4;
-      cropped[di] = pic.rgba[si];
-      cropped[di + 1] = pic.rgba[si + 1];
-      cropped[di + 2] = pic.rgba[si + 2];
-      cropped[di + 3] = pic.rgba[si + 3];
-    }
+    const start = ((oy + y) * size + ox) * 4;
+    pic.rgba.copy(cropped, y * cw * 4, start, start + cw * 4);
   }
   const up = resize({ w: cw, h: ch, rgba: cropped }, size, true);
 
   // 稀疏亮度场仅作 ±6% 的柔和变化，避免明显斑块和过曝。
   const GRID = 5;
   const field = Array.from({ length: GRID * GRID }, () => 0.94 + Math.random() * 0.12);
-  const fieldAt = (x, y) => {
+  const columns = Array.from({ length: size }, (_, x) => {
     const gx = (x / size) * (GRID - 1);
-    const gy = (y / size) * (GRID - 1);
     const x0 = Math.min(Math.floor(gx), GRID - 2);
-    const y0 = Math.min(Math.floor(gy), GRID - 2);
-    const fx = gx - x0;
-    const fy = gy - y0;
-    const a = field[y0 * GRID + x0];
-    const b = field[y0 * GRID + x0 + 1];
-    const c = field[(y0 + 1) * GRID + x0];
-    const d = field[(y0 + 1) * GRID + x0 + 1];
-    return a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c * (1 - fx) * fy + d * fx * fy;
-  };
+    return { x0, fx: gx - x0 };
+  });
 
   // 保留完整色阶；三个通道共享亮度噪声，避免彩色颗粒破坏轮廓和细节。
   const gamma = 0.96 + Math.random() * 0.08;
   const bright = Math.round((Math.random() - 0.5) * 6);
   const gammaValues = Float64Array.from({ length: 256 }, (_, value) => Math.pow(value / 255, gamma) * 255);
   for (let y = 0; y < up.h; y++) {
+    const gy = (y / size) * (GRID - 1), y0 = Math.min(Math.floor(gy), GRID - 2);
+    const fy = gy - y0, top = 1 - fy, row = y0 * GRID;
     for (let x = 0; x < up.w; x++) {
       const i = (y * up.w + x) * 4;
       if (up.rgba[i + 3] === 0) continue; // 透明角落不掺噪
-      const mul = fieldAt(x, y);
+      const { x0, fx } = columns[x], left = 1 - fx;
+      const a = field[row + x0], b = field[row + x0 + 1];
+      const c = field[row + GRID + x0], d = field[row + GRID + x0 + 1];
+      const mul = a * left * top + b * fx * top + c * left * fy + d * fx * fy;
       const noise = bright + Math.round((Math.random() - 0.5) * 4);
       for (let c = 0; c < 3; c++) {
         up.rgba[i + c] = clamp255(Math.round(gammaValues[up.rgba[i + c]] * mul + noise));

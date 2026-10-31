@@ -15,6 +15,8 @@ export function render(container, options = {}) {
   const assets = new URL(options.assetBaseUrl ?? defaultAssets, document.baseURI).href.replace(/\/?$/, '/');
   const action = options.action ?? 'default';
   if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(action)) throw new TypeError('action 格式不正确');
+  const requestTimeoutMs = options.requestTimeoutMs ?? 15000;
+  if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 2147483647) throw new TypeError('requestTimeoutMs 必须为 1–2147483647 的整数');
   const form = typeof options.form === 'string' ? document.querySelector(options.form) : options.form;
   if (form && !(form instanceof HTMLFormElement)) throw new TypeError('form 必须为表单元素或选择器');
   const host = document.createElement('span');
@@ -42,13 +44,32 @@ export function render(container, options = {}) {
     }
     notify('onStateChange', value);
   }
-  async function request(path, body, signal = controller.signal) {
+  async function request(path, body, signal = controller.signal, timeoutMs = requestTimeoutMs) {
+    if (signal.aborted) throw abortError();
     const started = performance.now();
-    const response = await (options.fetch ?? fetch)(apiUrl + path, { method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', signal,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify({ ...body, action }) });
-    const data = await response.json();
-    if (!response.ok) throw new CaptchaClientError(data.error || '验证请求失败', data.code, { status: response.status, triesRemaining: data.triesRemaining, retryAfterMs: data.retryAfterMs });
-    return { ...data, roundTripMs: performance.now() - started };
+    const transport = new AbortController();
+    let timer, onAbort;
+    const interrupted = new Promise((_, reject) => {
+      // 先确定错误，再取消传输，避免 fetch 的 AbortError 覆盖请求超时。
+      const stop = error => { reject(error); transport.abort(); };
+      onAbort = () => stop(abortError());
+      signal.addEventListener('abort', onAbort, { once: true });
+      timer = setTimeout(() => stop(new CaptchaClientError('验证请求超时，请重试', 'REQUEST_TIMEOUT')), timeoutMs);
+    });
+    try {
+      const pending = (async () => {
+        const response = await (options.fetch ?? fetch)(apiUrl + path, { method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', signal: transport.signal,
+          headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify({ ...body, action }) });
+        const data = await response.json();
+        if (!response.ok) throw new CaptchaClientError(data.error || '验证请求失败', data.code, { status: response.status, triesRemaining: data.triesRemaining, retryAfterMs: data.retryAfterMs });
+        return { ...data, roundTripMs: performance.now() - started };
+      })();
+      // 自定义 fetch 或响应体实现即使忽略 abort，也不能阻塞验证或接管后续任务。
+      return await Promise.race([interrupted, pending]);
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    }
   }
   function prepareToken(result) {
     if (typeof result.token !== 'string' || !/^[a-f0-9]{64}$/.test(result.token) || !Number.isFinite(result.expiresInMs) || result.expiresInMs <= 0 || !Number.isFinite(result.usableAfterMs) || result.usableAfterMs < 0) throw new CaptchaClientError('服务端返回了不正确的令牌');
@@ -70,7 +91,7 @@ export function render(container, options = {}) {
     void job.finally(() => { if (proofTask === job) proofTask = null; }).catch(() => {});
     return job;
   }
-  function releaseChallenge(id) { if (id) void request('/cancel', { id }, AbortSignal.timeout(3000)).catch(() => {}); }
+  function releaseChallenge(id) { if (id) void request('/cancel', { id }, AbortSignal.timeout(3000), 3000).catch(() => {}); }
   function puzzle(challenge, signal) {
     return new Promise((resolve, reject) => {
       if (!challenge || !/^[a-f0-9]{32}$/.test(challenge.id) || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(challenge.image)) { reject(new CaptchaClientError('服务端返回了不正确的图片挑战')); return; }

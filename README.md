@@ -137,11 +137,13 @@ widget.destroy();
 
 方法：`verify(): Promise<string | null>`、`getToken(): string | null`、`reset(): void`、`destroy(): void`。同一实例的并发 `verify()` 合并为同一任务；`reset/destroy` 使进行中的任务以 `AbortError` 拒绝。销毁可重复调用，销毁后 `verify()` 返回 `DESTROYED` 错误。
 
-选项：`apiUrl`、`action`（默认 `default`）、`form`（表单元素或选择器）、`assetBaseUrl`、`workerUrl`、`prewarm`（默认 `true`）、自定义 `fetch`。回调为 `onSuccess(token)`、`onError(error)`、`onExpire()`、`onStateChange(state)`。状态为 `idle/loading/verified/error/destroyed`。组件等待服务端规定的最短令牌使用时间后才触发成功。
+选项：`apiUrl`、`action`（默认 `default`）、`form`（表单元素或选择器）、`assetBaseUrl`、`workerUrl`、`prewarm`（默认 `true`）、`requestTimeoutMs`（默认 `15000`）、自定义 `fetch`。回调为 `onSuccess(token)`、`onError(error)`、`onExpire()`、`onStateChange(state)`。状态为 `idle/loading/verified/error/destroyed`。组件等待服务端规定的最短令牌使用时间后才触发成功。
+
+`requestTimeoutMs` 须为 1–2147483647 的整数，限制每次 API 请求及响应体读取的总耗时，不限制本地 PoW 计算或用户操作时间。超时返回 `CaptchaClientError`，`code` 为 `REQUEST_TIMEOUT`，可再次调用 `verify()` 重试；`reset/destroy` 仍以 `AbortError` 取消。自定义 `fetch` 即使忽略取消，迟到响应也不会恢复旧任务或触发成功。取消后的挑战释放使用独立的 3 秒限制。核验请求超时后不假定旧挑战或令牌仍可使用。
 
 图片方向验证失败时，组件会保留当前弹窗，释放旧挑战并自动获取新题；旧图片向左移出，新图片从右侧向左进入，滑块归零后开始下一轮。整个过程沿用同一次 `verify()` 调用，直到通过、取消或出现无法继续的错误。通过或取消时，弹窗与遮罩完成退出动画后再关闭；系统开启“减少动态效果”时跳过位移动画。
 
-PoW 默认在挂载时预热；Worker 和主线程回退都复用 SHA-256 单块缓冲区，避免每次尝试重复编码、分配和转换十六进制字符串。题图生成复用每题的 gamma 查表，并采用 PNG level 3 无损压缩。优化不降低 PoW 难度、不缩短安全等待或动效时间；验证耗时仍取决于设备算力、网络和配置。
+PoW 默认在挂载时预热；Worker 和主线程回退都复用 SHA-256 单块缓冲区，避免每次尝试重复编码、分配和转换十六进制字符串。题图生成复用每题的 gamma 查表与列插值参数，按行复制裁剪数据，旋转时跳过最终圆形外的像素，并采用 PNG level 3 无损压缩。客户端 JS/CSS 构建启用压缩。优化不降低 PoW 难度、不缩短安全等待或动效时间；验证耗时仍取决于设备算力、网络和配置。
 
 组件的 CSS、Worker 与弹窗分别归实例管理。默认从组件脚本所在目录加载 CSS 和 Worker；打包器项目应明确设置 `assetBaseUrl`，并将四个构建文件复制到该目录。跨域加载 Worker 可能受浏览器策略限制，组件会回退到分块计算；将 Worker 放在业务页面同源目录可启用后台计算。严格 CSP 需要允许相应脚本、样式、图片 `data:`、API 连接与 Worker 来源；Worker 加载失败仍可回退。
 
@@ -227,6 +229,8 @@ Content-Type: application/json
 | `imagesDir` | 内置 10 张题图 | 自备 PNG 目录；无可用题图时启动报错 |
 | `store` / `namespace` | 自有内存 / 随机实例命名空间 | 外部状态接口与键前缀 |
 | `now` | `Date.now` | 可注入时钟，便于模拟过期 |
+
+图片答案提交早于 `minSolveMs` 时仍返回 `TOO_FAST` 并受请求限流，但不扣减尝试次数、不增加失败声誉。组件自动等待剩余时间后重试；错误答案与异常轨迹仍会计罚。
 
 内存存储默认最多 10000 个键，满时返回 503，过期项定期清理。每个自有存储的清理定时器均调用 `unref()`，`close()` 会释放。重启后未解挑战和令牌失效。注入的外部存储由调用方负责关闭。
 

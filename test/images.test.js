@@ -5,6 +5,7 @@ import { decodePng, encodePng, rotatePixels, obscurePuzzle, loadPuzzles } from '
 import { sha256Hex } from '../src/client/hash.js';
 import { sampleTrajectory } from '../src/client/tracking.js';
 import crypto from 'node:crypto';
+import { rotatePuzzleToPng } from '../src/image-codec.js';
 
 test('十张题图完整；解码编码及随机加工仍保持尺寸', () => {
   const puzzles = loadPuzzles(new URL('../assets/puzzles/', import.meta.url));
@@ -78,6 +79,20 @@ test('真实像素旋转为顺时针，客户端需用负角度回正', () => {
   const original = rotatePixels(rotated, -90);
   assert.equal(original.rgba[(1 * 8 + 4) * 4], 255);
 });
+test('圆形出题与完整旋转后遮罩一致，兼容奇偶尺寸、矩形和跨零角度', () => {
+  for (const [w, h] of [[1, 1], [5, 5], [8, 5], [17, 32], [64, 64]]) {
+    const rgba = Buffer.from(Array.from({ length: w * h * 4 }, (_, i) => (i * 37 + 91) % 256));
+    const pic = { w, h, rgba };
+    for (const angle of [-23.5, 0, 90, 137, 359]) {
+      const expected = rotatePixels(pic, angle), center = expected.w / 2, radius = Math.max(0, center - 2);
+      for (let y = 0; y < expected.h; y++) for (let x = 0; x < expected.w; x++) {
+        if ((x - center) ** 2 + (y - center) ** 2 > radius ** 2) expected.rgba.fill(0, (y * expected.w + x) * 4, (y * expected.w + x) * 4 + 4);
+      }
+      assert.deepEqual(rotatePuzzleToPng(pic, angle), encodePng(expected));
+    }
+  }
+});
+
 test('浏览器 SHA-256 与 Node 一致；轨迹始终均匀限制到 100 点', () => {
   for (const text of ['', 'abc', '中文hello', 'x'.repeat(1000)]) assert.equal(sha256Hex(text), crypto.createHash('sha256').update(text).digest('hex'));
   for (const size of [5, 99, 100, 149, 151, 199, 299, 499, 999]) {

@@ -58,6 +58,8 @@ PoW、挑战、尝试次数、限流、失败声誉和令牌都保存在 SQLite 
 
 不同 IP 使用不同对象，避免所有图片处理集中在一个全局对象。同 IP 的多个组件共用每 IP 限额，每道挑战仍独立取消。一个 Worker 部署对应一个业务。宿主业务的认证、CSRF 和业务限流由接入方保留。
 
+连续操作若得到相同清理时间会复用 alarm 排程，空状态也不重复删除 alarm。alarm 触发、对象重建或排程失败后会重新确认；访问时的 TTL 校验始终执行。
+
 ## 题库与资源
 
 构建时解码和缩放 PNG，生成私有 `.workers/puzzles.js` 并编入脚本；挑战仍在服务端执行随机加工、像素旋转与 PNG 编码，答案不会传给浏览器。公开目录仅为 `dist`，通过 `ASSETS` 绑定和文件白名单提供四个客户端文件，后端代码、原始题库和 secret 不在公开目录。[资源绑定说明](https://developers.cloudflare.com/workers/static-assets/binding/)

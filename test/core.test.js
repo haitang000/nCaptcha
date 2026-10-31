@@ -72,6 +72,22 @@ test('最低求解时间保留挑战；三次错误耗尽；取消只释放自�
     await assert.rejects(f.captcha.solveChallenge({ ...ctx, id: c.id, angle: -f.answer(c.id) }), code('CHALLENGE_EXPIRED'));
   } finally { await f.close(); }
 });
+test('过早提交仍受限流但不增加失败声誉或消耗尝试，错误答案与轨迹继续计罚', async () => {
+  const f = fixture({ powBits: 0, minSolveMs: 1000, rateLimit: 5, rateWindowMs: 1000 });
+  try {
+    const { challenge } = await verify(f.captcha);
+    const input = { ...ctx, id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory };
+    for (let i = 0; i < 3; i++) await assert.rejects(f.captcha.solveChallenge(input), error => error.code === 'TOO_FAST' && error.details.retryAfterMs === 1000);
+    await assert.rejects(f.captcha.solveChallenge(input), code('RATE_LIMITED'));
+    f.advance(1000);
+    assert.equal((await f.captcha.createPow(ctx)).bits, 0);
+    await assert.rejects(f.captcha.solveChallenge({ ...input, angle: input.angle + 90 }), error => error.code === 'ANGLE_INCORRECT' && error.details.triesRemaining === 2);
+    await assert.rejects(f.captcha.solveChallenge({ ...input, trajectory: null }), error => error.code === 'BEHAVIOR_REJECTED' && error.details.triesRemaining === 1);
+    await assert.rejects(f.captcha.solveChallenge({ ...input, angle: input.angle + 90 }), code('CHALLENGE_EXHAUSTED'));
+    assert.equal((await f.captcha.createPow(ctx)).bits, 2);
+  } finally { await f.close(); }
+});
+
 test('挑战过期、跨用途/跨 IP、并发求解仅成功一次', async t => {
   for (const kind of ['expiry', 'ip', 'action', 'race']) await t.test(kind, async () => {
     const f = fixture();
