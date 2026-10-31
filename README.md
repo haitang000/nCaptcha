@@ -19,7 +19,11 @@ npm run build
 npm run demo
 ```
 
-打开 [嵌入式示例](http://127.0.0.1:8787/)。普通 script 与 ES module 示例均可运行；页面展示两个独立组件。点击“验证并提交”会先验证，再由业务后端消费令牌。
+打开 [Landing page 与在线体验](http://127.0.0.1:8787/)。首页可体验真实的 PoW 和图片回正验证，切换组件深浅主题，并将令牌提交到服务端核验；还提供验证机制介绍、可复制的接入代码和常见问题。
+
+原有 [普通 script 示例](http://127.0.0.1:8787/examples) 与 [ES module 示例](http://127.0.0.1:8787/module) 仍可运行；示例展示两个独立组件。点击“验证并提交”会先验证，再由业务后端消费令牌。
+
+Landing page 源码位于 `landing/`，随 `npm run build` 复制到 `dist/`。Workers 部署也会在根路径提供同一页面。公开的 `POST /demo/verify` 仅接受同源请求，只核验绑定当前 IP、用途为 `landing-demo` 的令牌；业务令牌仍由业务后端通过受密钥保护的 `/siteverify` 核验。
 
 ## 在 Node.js 服务内嵌入
 

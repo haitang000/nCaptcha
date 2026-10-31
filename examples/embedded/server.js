@@ -2,6 +2,7 @@ import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { createCaptcha } from '../../src/index.js';
 import { createHttpHandler, getClientIp, readJson, sendJson } from '../../src/http.js';
+import { serveLanding } from '../../src/landing.js';
 import { servePage, notFound } from '../shared.js';
 
 export function startEmbeddedDemo({ port = 8787, captchaOptions = {} } = {}) {
@@ -9,7 +10,8 @@ export function startEmbeddedDemo({ port = 8787, captchaOptions = {} } = {}) {
   const handler = createHttpHandler(captcha, { allowedOrigins: [`http://127.0.0.1:${port}`, `http://localhost:${port}`] });
   const server = http.createServer(async (req, res) => {
     try {
-      if (await handler(req, res) || await servePage(req, res)) return;
+      const allowedOrigins = [`http://127.0.0.1:${server.address().port}`, `http://localhost:${server.address().port}`];
+      if (await handler(req, res) || await serveLanding(req, res, { captcha, allowedOrigins }) || await servePage(req, res, { pagePath: '/examples' })) return;
       if (req.url === '/submit' && req.method === 'POST') {
         const origin = req.headers.origin;
         if (origin && ![`http://127.0.0.1:${port}`, `http://localhost:${port}`].includes(origin)) { sendJson(res, 403, { error: '来源不正确' }); return; }

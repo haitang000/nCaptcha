@@ -3,6 +3,7 @@ import http from 'node:http';
 import { createCaptcha, createMemoryStore } from '../src/index.js';
 import { createHttpHandler, sendJson, readJson, getClientIp } from '../src/http.js';
 import { servePage } from '../examples/shared.js';
+import { serveLanding } from '../src/landing.js';
 import { startStandaloneDemo } from '../examples/standalone/server.js';
 const records = new Map();
 const memory = createMemoryStore();
@@ -19,7 +20,8 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req); const success = await captcha.consumeToken({ ip: getClientIp(req), action: 'demo', token: body.token });
       sendJson(res, success ? 200 : 400, { success }); return;
     }
-    if (await servePage(req, res)) return;
+    if (await serveLanding(req, res, { captcha, allowedOrigins: ['http://127.0.0.1:18877'] })) return;
+    if (await servePage(req, res, { pagePath: '/examples' })) return;
     res.writeHead(404); res.end();
   } catch (err) { sendJson(res, 500, { error: err.message }); }
 });

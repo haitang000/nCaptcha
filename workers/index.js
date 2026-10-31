@@ -2,12 +2,13 @@ import { DurableObject } from 'cloudflare:workers';
 import { Buffer } from 'node:buffer';
 import { createCaptchaCore, validateContext } from '../src/core.js';
 import { CaptchaError } from '../src/error.js';
-import { createFetchHandler, jsonResponse } from '../src/fetch.js';
+import { createFetchHandler, jsonResponse, readRequestJson } from '../src/fetch.js';
 import { createDurableStore } from './store.js';
 import { workerConfig } from './config.js';
 import puzzleData from '../.workers/puzzles.js';
 
 const operations = ['createPow', 'verifyBehavior', 'solveChallenge', 'cancelChallenge', 'consumeToken'];
+const landingAssets = new Set(['/', '/landing/styles.css', '/landing/app.js', '/landing/favicon.svg']);
 let pictures;
 function getPictures() {
   return pictures ??= puzzleData.map(({ rgba, ...image }) => ({ ...image, rgba: Buffer.from(rgba, 'base64') }));
@@ -50,7 +51,21 @@ export function createWorkerHandler() {
           getIp: req => validateContext({ ip: req.headers.get('CF-Connecting-IP') }).ip,
           serveAsset: (name, req) => { const url = new URL(req.url); url.pathname = '/' + name; url.search = ''; return env.ASSETS.fetch(new Request(url, req)); },
         });
-        if (new URL(request.url).pathname === '/health' && request.method === 'GET') return jsonResponse(200, { ok: true });
+        const url = new URL(request.url);
+        if (url.pathname === '/health' && request.method === 'GET') return jsonResponse(200, { ok: true });
+        if (landingAssets.has(url.pathname) && ['GET', 'HEAD'].includes(request.method)) return env.ASSETS.fetch(request);
+        if (url.pathname === '/demo/verify') {
+          if (request.method !== 'POST') return jsonResponse(405, { error: '请使用 POST', code: 'METHOD_NOT_ALLOWED' });
+          if (request.headers.get('origin') !== url.origin) return jsonResponse(403, { error: '该来源未获准访问', code: 'ORIGIN_DENIED' });
+          try {
+            const { token } = await readRequestJson(request);
+            const success = await proxy.consumeToken({ token, ip: request.headers.get('CF-Connecting-IP'), action: 'landing-demo' });
+            return jsonResponse(success ? 200 : 400, success ? { success: true } : { success: false, error: '令牌无效或已过期，请重新验证' });
+          } catch (error) {
+            if (!(error instanceof CaptchaError)) throw error;
+            return jsonResponse(error.status, { error: error.message, code: error.code });
+          }
+        }
         return await handle(request) ?? jsonResponse(404, { error: '未找到', code: 'NOT_FOUND' });
       } catch (error) {
         console.error('[captcha worker]', error);

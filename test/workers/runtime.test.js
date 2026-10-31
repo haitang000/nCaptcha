@@ -96,6 +96,28 @@ test('workerd 持久存储上的每 IP 限流原子执行', async () => {
   assert.equal(responses.filter(response => response.status === 429).length, 1);
   assert.equal((await get('/captcha/v1/pow', '192.0.2.9')).status, 200);
 });
+
+test('Workers Landing 资源与专用 Demo 核验：来源、用途绑定和一次性消费', async () => {
+  for (const path of ['/', '/landing/styles.css', '/landing/app.js', '/landing/favicon.svg']) {
+    const response = await get(path); assert.equal(response.status, 200, path);
+  }
+  const ip = '192.0.2.20';
+  const demo = (token, origin = 'https://captcha.example') => mf.dispatchFetch('https://captcha.example/demo/verify', {
+    method: 'POST', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ token }),
+  });
+  const business = await solve(ip, 'register');
+  assert.equal((await demo(business.token)).status, 400);
+  const businessCheck = await post('/siteverify', { token: business.token, ip, action: 'register' }, ip, { Authorization: `Bearer ${secret}` });
+  assert.equal((await businessCheck.json()).success, true);
+  const result = await solve(ip, 'landing-demo');
+  assert.equal((await demo(result.token, 'https://evil.example')).status, 403);
+  assert.equal((await demo(result.token)).status, 200);
+  assert.equal((await demo(result.token)).status, 400);
+  const invalid = await mf.dispatchFetch('https://captcha.example/demo/verify', {
+    method: 'POST', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', Origin: 'https://captcha.example' }, body: '{',
+  });
+  assert.equal(invalid.status, 400);
+});
 test('浏览器从真实 Workers 资源加载 UI，完成图片验证并由业务后端消费', async () => {
   const browser = await chromium.launch();
   try {

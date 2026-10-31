@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import { sendJson } from '../src/http.js';
 
-export async function servePage(req, res, { apiUrl = '/captcha/v1', assetBaseUrl = '/captcha/assets/' } = {}) {
-  if (req.method !== 'GET' || !['/', '/module'].includes(req.url)) return false;
+export async function servePage(req, res, { apiUrl = '/captcha/v1', assetBaseUrl = '/captcha/assets/', pagePath = '/' } = {}) {
+  if (req.method !== 'GET' || ![pagePath, '/module'].includes(req.url)) return false;
   const template = await fs.readFile(new URL('./page.html', import.meta.url), 'utf8');
   // 配置只由示例服务端提供，编码为安全的 JS 字面量。
   const json = value => JSON.stringify(value).replaceAll('<', '\\u003c');
@@ -10,7 +10,7 @@ export async function servePage(req, res, { apiUrl = '/captcha/v1', assetBaseUrl
     ? `<script type="module">import * as Captcha from ${json(assetBaseUrl + 'captcha.esm.js')};\n${clientSource(apiUrl, assetBaseUrl)}</script>`
     : `<script src="${assetBaseUrl}captcha.js"></script><script>${clientSource(apiUrl, assetBaseUrl)}</script>`;
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(template.replace('<!-- CAPTCHA_SCRIPT -->', script)); return true;
+  res.end(template.replace('href="/"', `href="${pagePath}"`).replace('<!-- CAPTCHA_SCRIPT -->', script)); return true;
 }
 function clientSource(apiUrl, assetBaseUrl) {
   return `

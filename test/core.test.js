@@ -101,6 +101,7 @@ test('令牌等待、有效期、重放、IP/用途绑定与并发消费', async
     for (const wrong of [{ ip: '127.0.0.2' }, { action: 'other' }]) {
       const token = (await solved(f)).token; f.advance(300);
       assert.equal(await f.captcha.consumeToken({ ...ctx, ...wrong, token }), false);
+      assert.equal(await f.captcha.consumeToken({ ...ctx, token }), true);
       assert.equal(await f.captcha.consumeToken({ ...ctx, token }), false);
     }
     const token = (await solved(f)).token; f.advance(300000);
