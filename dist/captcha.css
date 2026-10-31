@@ -41,6 +41,8 @@ dialog.puzzle { position: fixed; width: min(400px, calc(100vw - 32px)); height: 
 dialog.puzzle[open] { animation: puzzle-enter 240ms cubic-bezier(.23, 1, .32, 1) backwards; }
 dialog::backdrop { background: #0006; backdrop-filter: blur(3px); }
 dialog.puzzle[open]::backdrop { animation: backdrop-enter 180ms cubic-bezier(.23, 1, .32, 1) backwards; }
+dialog.puzzle[open].is-closing { animation: puzzle-exit 160ms cubic-bezier(.23, 1, .32, 1) forwards; }
+dialog.puzzle[open].is-closing::backdrop { animation: backdrop-exit 160ms cubic-bezier(.23, 1, .32, 1) forwards; }
 .puzzle-eyebrow { margin: 0; color: #bcbcc0; font-size: 16px; font-weight: 600; line-height: 22px; }
 .puzzle h3 { margin: 0; font-size: clamp(19px, 5.8vw, 24px); font-weight: 300; line-height: 34px; letter-spacing: 0; white-space: nowrap; outline: none; }
 .puzzle h3 strong { font-weight: 750; }
@@ -48,6 +50,13 @@ dialog.puzzle[open]::backdrop { animation: backdrop-enter 180ms cubic-bezier(.23
 .stage:focus-visible { outline-offset: 4px; }
 .stage.dragging { cursor: grabbing; }
 .stage img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.stage-spinner { display: none; position: absolute; inset: 0; border: 4px solid #006fee26; border-top-color: #006fee; border-right-color: #006fee; border-radius: 50%; pointer-events: none; }
+.stage[data-phase=loading] .stage-spinner { display: block; animation: stage-spin 700ms linear infinite; }
+.stage-result { position: absolute; inset: 0; display: grid; place-items: center; border-radius: inherit; background: #0008; opacity: 0; pointer-events: none; transition: opacity 140ms cubic-bezier(.23, 1, .32, 1); }
+.stage-result svg { width: 72px; height: 72px; fill: none; stroke: white; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.stage-result path { display: none; stroke-dasharray: 1; stroke-dashoffset: 0; }
+.stage[data-phase=success] .stage-result, .stage[data-phase=failure] .stage-result { opacity: 1; }
+.stage[data-phase=success] .stage-check, .stage[data-phase=failure] .stage-cross { display: block; animation: stage-mark 280ms cubic-bezier(.33, 1, .68, 1) 60ms both; }
 .range { --grip: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='24' viewBox='0 0 16 24'%3E%3Cg fill='%23d5d5d5'%3E%3Ccircle cx='4' cy='4' r='2.7'/%3E%3Ccircle cx='12' cy='4' r='2.7'/%3E%3Ccircle cx='4' cy='12' r='2.7'/%3E%3Ccircle cx='12' cy='12' r='2.7'/%3E%3Ccircle cx='4' cy='20' r='2.7'/%3E%3Ccircle cx='12' cy='20' r='2.7'/%3E%3C/g%3E%3C/svg%3E"); display: block; appearance: none; -webkit-appearance: none; width: 100%; height: 64px; margin: 23px 0 0; padding: 0; border: 0; border-radius: 999px; background: var(--captcha-track, #eee); box-shadow: inset 0 0 0 1.5px #ddd, inset 0 1px 4px #00000008; cursor: grab; touch-action: none; }
 .range:active { cursor: grabbing; }
 .range::-webkit-slider-runnable-track { height: 64px; border: 0; border-radius: 999px; background: transparent; }
@@ -56,6 +65,7 @@ dialog.puzzle[open]::backdrop { animation: backdrop-enter 180ms cubic-bezier(.23
 .range::-moz-range-progress { height: 64px; background: transparent; }
 .range::-moz-range-thumb { box-sizing: border-box; width: 64px; height: 64px; border: 1px solid #d8d8d8; border-radius: 50%; background: #fff var(--grip) center / 16px 24px no-repeat; box-shadow: 3px 1px 10px #00000017; }
 .range:disabled { cursor: wait; opacity: .65; }
+.stage[aria-disabled=true] { cursor: default; }
 .puzzle[aria-busy=true] .stage { cursor: wait; }
 .has-error .range { box-shadow: inset 0 0 0 1.5px var(--_captcha-danger); }
 .error-text { position: absolute; inset: auto 24px 12px; color: var(--_captcha-danger); font-size: 12px; line-height: 18px; }
@@ -67,9 +77,13 @@ dialog.puzzle[open]::backdrop { animation: backdrop-enter 180ms cubic-bezier(.23
 @keyframes blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 @keyframes puzzle-enter { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
 @keyframes backdrop-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes puzzle-exit { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.96); } }
+@keyframes backdrop-exit { from { opacity: 1; } to { opacity: 0; } }
+@keyframes stage-spin { to { transform: rotate(360deg); } }
+@keyframes stage-mark { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 @keyframes ripple { from { transform: translate(-50%, -50%) scale(0); opacity: .15; } to { transform: translate(-50%, -50%) scale(5); opacity: 0; } }
 @keyframes pop { 0%, 100% { transform: scale(1); } 30% { transform: scale(1.03); } }
 @keyframes shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-3px); } 40%, 80% { transform: translateX(3px); } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition: none !important; } dialog.puzzle[open], dialog.puzzle[open]::backdrop { animation: none !important; } .widget:hover, .widget:active { transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition: none !important; } dialog.puzzle[open], dialog.puzzle[open]::backdrop, .stage-spinner, .stage-result path { animation: none !important; } .widget:hover, .widget:active { transform: none; } }
 @media (prefers-reduced-transparency: reduce) { dialog::backdrop { backdrop-filter: none; } }
 @media (prefers-contrast: more) { .widget, dialog { border-width: 2px; } }

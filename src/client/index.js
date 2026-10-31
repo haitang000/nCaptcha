@@ -48,6 +48,11 @@ export function render(container, options = {}) {
     if (!response.ok) throw new CaptchaClientError(data.error || '验证请求失败', data.code, { status: response.status, triesRemaining: data.triesRemaining, retryAfterMs: data.retryAfterMs });
     return { ...data, roundTripMs: performance.now() - started };
   }
+  function prepareToken(result) {
+    if (typeof result.token !== 'string' || !/^[a-f0-9]{64}$/.test(result.token) || !Number.isFinite(result.expiresInMs) || result.expiresInMs <= 0 || !Number.isFinite(result.usableAfterMs) || result.usableAfterMs < 0) throw new CaptchaClientError('服务端返回了不正确的令牌');
+    const receivedAt = performance.now();
+    return { ...result, tokenExpiresAt: receivedAt + result.expiresInMs - (result.roundTripMs ?? 0), tokenUsableAt: receivedAt + result.usableAfterMs };
+  }
   function prepareProof() {
     if (prepared && prepared.deadline > performance.now() + 1000) return Promise.resolve(prepared.pow);
     if (proofTask) return proofTask;
@@ -73,7 +78,11 @@ export function render(container, options = {}) {
       const titleId = `captcha-title-${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`;
       dlg.setAttribute('aria-labelledby', titleId);
       const helpId = `${titleId}-help`;
-      dlg.innerHTML = `<p class="puzzle-eyebrow" role="status">请进行安全验证</p><h3 id="${titleId}" tabindex="-1">拖动滑块, 使图片方向为<strong>正</strong></h3><div class="stage" tabindex="0" role="slider" aria-label="旋转图片" aria-describedby="${helpId}" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 度"><img alt="旋转验证图片" draggable="false"></div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="旋转图片角度" aria-describedby="${helpId}"><p id="${helpId}" class="sr-only">拖动滑块，松开后验证。也可用方向键微调，按 Enter 确认；按 Escape 或点击弹窗外取消。</p><div class="error-text" role="alert"></div><button type="button" class="puzzle-cancel" data-cancel aria-label="取消验证">取消</button>`;
+      dlg.innerHTML = `<p class="puzzle-eyebrow" role="status">请进行安全验证</p><h3 id="${titleId}" tabindex="-1">拖动滑块, 使图片方向为<strong>正</strong></h3>
+        <div class="stage" tabindex="0" role="slider" aria-label="旋转图片" aria-describedby="${helpId}" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" aria-valuetext="0 度">
+          <img alt="旋转验证图片" draggable="false"><span class="stage-spinner" aria-hidden="true"></span>
+          <span class="stage-result" aria-hidden="true"><svg viewBox="0 0 64 64"><path class="stage-check" pathLength="1" d="M16 33 28 45 49 21"/><path class="stage-cross" pathLength="1" d="m22 22 20 20 m0-20-20 20"/></svg></span>
+        </div><input class="range" type="range" min="0" max="359" step="1" value="0" aria-label="旋转图片角度" aria-describedby="${helpId}"><p id="${helpId}" class="sr-only">拖动滑块，松开后验证。也可用方向键微调，按 Enter 确认；按 Escape 或点击弹窗外取消。</p><div class="error-text" role="alert"></div><button type="button" class="puzzle-cancel" data-cancel aria-label="取消验证">取消</button>`;
       root.append(dlg);
       const stage = dlg.querySelector('.stage'), img = dlg.querySelector('img'), range = dlg.querySelector('.range'), eyebrow = dlg.querySelector('.puzzle-eyebrow'), errEl = dlg.querySelector('.error-text');
       img.src = challenge.image;
@@ -85,6 +94,7 @@ export function render(container, options = {}) {
         clearTimeout(challengeTimer); cancelPuzzle = null; dialog = null;
         if (challengeId === challenge.id) challengeId = null;
         if (!value) releaseChallenge(challenge.id);
+        for (const animation of dlg.getAnimations?.({ subtree: true }) ?? []) animation.cancel();
         if (dlg.open) dlg.close(); dlg.remove();
         error ? reject(error) : resolve(value);
       };
@@ -103,25 +113,43 @@ export function render(container, options = {}) {
       async function submit() {
         if (submitting || settled || signal.aborted) return;
         submitting = true; range.disabled = true; errEl.textContent = '';
-        dlg.classList.remove('has-error'); dlg.setAttribute('aria-busy', 'true'); stage.setAttribute('aria-disabled', 'true'); eyebrow.textContent = '正在验证…';
+        const checkingSince = performance.now(), feedbackMs = motion() ? 560 : 300, exitMs = motion() ? 160 : 0;
+        dlg.classList.remove('has-error'); dlg.setAttribute('aria-busy', 'true'); stage.setAttribute('aria-disabled', 'true'); stage.dataset.phase = 'loading'; eyebrow.textContent = '正在验证…';
+        let result = null, failure = null;
         try {
-          let result;
           for (let attempt = 0; attempt < 2; attempt++) {
-            try { result = await request('/challenge', { id: challenge.id, angle: Math.round(deg) % 360, pointer: tracking.getHints().pointer }, signal); break; }
+            try { result = prepareToken(await request('/challenge', { id: challenge.id, angle: Math.round(deg) % 360, pointer: tracking.getHints().pointer }, events.signal)); break; }
             catch (error) {
               // 松手比最低求解间隔早时等待剩余时间；不要求用户再次拖动。
-              if (attempt === 0 && error.code === 'TOO_FAST' && Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) { await delay(error.retryAfterMs + 25, signal); continue; }
+              if (attempt === 0 && error.code === 'TOO_FAST' && Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) { await delay(error.retryAfterMs + 25, events.signal); continue; }
               throw error;
             }
           }
-          if (!signal.aborted) finish(result);
         } catch (error) {
+          failure = error;
+        }
+        if (settled) return;
+        clearTimeout(challengeTimer);
+        // 请求与最短加载反馈并行；使用同一个可取消信号管理所有等待。
+        try {
+          await delay(Math.max(0, 500 - (performance.now() - checkingSince)), events.signal);
+          if (result && result.tokenExpiresAt <= performance.now() + feedbackMs + exitMs) {
+            result = null; failure = new CaptchaClientError('令牌已过期，请重新验证', 'TOKEN_EXPIRED');
+          }
+          stage.dataset.phase = failure ? 'failure' : 'success';
+          dlg.removeAttribute('aria-busy'); eyebrow.textContent = failure ? '验证失败' : '验证通过';
+          if (failure) { errEl.textContent = failure.message; dlg.classList.add('has-error'); }
+          const drawing = dlg.querySelector(failure ? '.stage-cross' : '.stage-check').getAnimations?.() ?? [];
+          await Promise.allSettled(drawing.map(animation => animation.finished));
           if (settled) return;
-          if (error.code && !['ANGLE_INCORRECT', 'TOO_FAST'].includes(error.code)) { finish(null, error); return; }
-          errEl.textContent = error.message; dlg.classList.add('has-error');
-        } finally {
-          submitting = false;
-          if (!settled) { range.disabled = false; dlg.removeAttribute('aria-busy'); stage.removeAttribute('aria-disabled'); eyebrow.textContent = '请进行安全验证'; }
+          await delay(drawing.length ? 180 : motion() ? feedbackMs : 300, events.signal);
+          dlg.classList.add('is-closing');
+          const exiting = dlg.getAnimations?.() ?? [];
+          if (exiting.length) await Promise.allSettled(exiting.map(animation => animation.finished));
+          else await delay(exitMs, events.signal);
+          if (!settled) finish(result, failure);
+        } catch (error) {
+          if (!settled) finish(null, error);
         }
       }
       const angleOf = e => { const r = stage.getBoundingClientRect(); return Math.atan2(e.clientY - r.top - r.height / 2, e.clientX - r.left - r.width / 2) * 180 / Math.PI; };
@@ -166,11 +194,10 @@ export function render(container, options = {}) {
         const pow = await prepareProof(); prepared = null;
         let result = await request('/verify', { pow, trajectory: tracking.getTrajectory(), formBehavior: tracking.getFormBehavior(), hints: tracking.getHints() }, signal);
         if (signal.aborted) throw abortError();
-        if (result.challenge) result = await puzzle(result.challenge, signal);
+        result = result.challenge ? await puzzle(result.challenge, signal) : prepareToken(result);
         if (!result) { state('idle', '我不是机器人'); return null; }
-        if (typeof result.token !== 'string' || !/^[a-f0-9]{64}$/.test(result.token) || !Number.isFinite(result.expiresInMs) || !Number.isFinite(result.usableAfterMs) || result.usableAfterMs < 0) throw new CaptchaClientError('服务端返回了不正确的令牌');
-        const until = performance.now() + result.expiresInMs - (result.roundTripMs ?? 0);
-        await delay(result.usableAfterMs, signal);
+        const until = result.tokenExpiresAt;
+        await delay(Math.max(0, result.tokenUsableAt - performance.now()), signal);
         if (until <= performance.now()) throw new CaptchaClientError('令牌已过期，请重新验证', 'TOKEN_EXPIRED');
         token = result.token; expiresAt = until;
         expiryTimer = setTimeout(() => { reset(); notify('onExpire'); }, Math.max(1, until - performance.now()));

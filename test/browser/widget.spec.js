@@ -165,7 +165,7 @@ test('滑块键盘微调不提前提交，Enter 确认且网络过程中禁止�
   await range.evaluate(el => { el.dispatchEvent(new Event('change')); el.dispatchEvent(new Event('change')); });
   await expect(page.locator('.widget')).toHaveClass(/verified/); expect(requests).toBe(1);
 });
-test('过快松手自动等待，角度错误后保留滑块位置可继续微调', async ({ page }) => {
+test('过快松手自动等待，错误反馈后关闭弹窗并可重新验证', async ({ page }) => {
   let requests = 0;
   await page.route('**/captcha/v1/challenge', async route => {
     requests++;
@@ -174,12 +174,14 @@ test('过快松手自动等待，角度错误后保留滑块位置可继续微�
     await route.continue();
   });
   await mount(page);
-  const challenge = await start(page);
+  await start(page);
   const range = page.locator('.range');
   await range.evaluate(el => { el.value = '123'; el.dispatchEvent(new Event('input')); el.dispatchEvent(new Event('change')); });
+  await expect.poll(() => page.locator('.stage').getAttribute('data-phase'), { intervals: [20] }).toBe('failure');
   await expect(page.getByRole('alert')).toHaveText('方向还未回正，请微调后重试');
-  expect(requests).toBe(2); expect(await range.inputValue()).toBe('123'); await expect(range).toBeEnabled();
-  await answer(page, challenge); await expect(page.locator('.widget')).toHaveClass(/verified/);
+  expect(requests).toBe(2); expect(await range.inputValue()).toBe('123'); await expect(range).toBeDisabled();
+  await expect(page.locator('dialog')).toHaveCount(0); await expect(page.locator('.widget')).toHaveClass(/error/);
+  await answer(page, await start(page)); await expect(page.locator('.widget')).toHaveClass(/verified/);
 });
 test('鼠标和触屏实际拖动滑块在松手时只提交一次', async ({ page, isMobile }) => {
   const requests = [];
@@ -200,6 +202,7 @@ test('鼠标和触屏实际拖动滑块在松手时只提交一次', async ({ pa
     await page.mouse.move(from.x, from.y); await page.mouse.down(); await page.mouse.move(to.x, to.y, { steps: 8 });
     expect(requests.length).toBe(0); await page.mouse.up();
   }
+  await expect.poll(() => page.locator('.stage').getAttribute('data-phase'), { intervals: [20] }).toBe('failure');
   await expect(page.getByRole('alert')).toHaveText('请继续调整图片方向');
   expect(requests.length).toBe(1); expect(requests[0].angle).toBe(359);
   await page.keyboard.press('Escape');
