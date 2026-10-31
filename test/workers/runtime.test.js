@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { fileURLToPath } from 'node:url';
-import { nonceFor, challengeTrajectory } from '../helpers.js';
+import { nonceFor, challengeTrajectory, keyboardForAngle } from '../helpers.js';
+import { behaviorScenarios } from '../fixtures/behavior-scenarios.js';
 import { chromium } from '@playwright/test';
 import { rotateByKeyboard } from '../browser/keyboard-helper.js';
 
@@ -49,6 +50,23 @@ test('真实 workerd 严格挑战、图片 PNG、原子并发消费和重放', a
   const responses = await Promise.all(Array.from({ length: 12 }, () => post('/siteverify', { token: result.token, ip, action: 'login' }, '203.0.113.99', { Authorization: `Bearer ${secret}` })));
   const verdicts = await Promise.all(responses.map(r => r.json()));
   assert.equal(verdicts.filter(r => r.success).length, 1);
+});
+
+test('Workers 使用同一多维评测，拒绝抖动采样恒速与混合键盘掩盖轨迹', async () => {
+  for (const [i, id] of ['jitter-speed', 'mixed-bypass'].entries()) {
+    const ip = `192.0.2.${22 + i}`, challenge = await issue(ip);
+    const row = (await (await dbFor(ip)).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
+    const angle = -JSON.parse(row.value).answer;
+    const scenario = behaviorScenarios.find(s => s.id === id);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const response = await post('/challenge', { ...scenario.input, id: challenge.id, action: 'login', angle, keyboard: keyboardForAngle(angle) }, ip);
+    assert.equal(response.status, 400);
+    const error = await response.json();
+    assert.equal(error.code, 'BEHAVIOR_REJECTED'); assert.equal(error.triesRemaining, 2);
+    assert.equal(error.dimensions, undefined);
+    const retry = await post('/challenge', { id: challenge.id, action: 'login', angle, trajectory: challengeTrajectory }, ip);
+    assert.equal(retry.status, 200); assert.ok((await retry.json()).token);
+  }
 });
 test('真实 Durable Object 驱逐/重建后仍保留令牌；过期状态不通过', async () => {
   const ip = '192.0.2.2';

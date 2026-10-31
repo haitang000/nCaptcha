@@ -6,6 +6,15 @@ export interface Point { x: number; y: number; t: number }
 export interface KeyboardBehavior { startAngle: number; events: { key: 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' | 'PageUp' | 'PageDown' | 'Home' | 'End' | 'Enter'; control: 'range' | 'stage'; t: number }[] }
 export interface FormBehavior { totalMs: number; focusOrder: string[]; fields: Record<string, { n: number; meanGap: number; varGap: number }> }
 export interface Hints { dpr: number; sw: number; sh: number; tz: number; lang: string[]; pointer?: Pointer; coarse?: boolean }
+export type BehaviorDimension = 'integrity' | 'timing' | 'motion' | 'dynamics' | 'rhythm' | 'keyboard' | 'environment' | 'form';
+export interface BehaviorAssessment {
+  /** 仅表示行为检查通过，不表示图片答案正确或真人概率。 */
+  passed: boolean;
+  reasons: string[];
+  dimensions: Record<BehaviorDimension, { status: 'pass' | 'fail' | 'info' | 'unavailable'; metrics: Record<string, number | boolean> }>;
+}
+/** 离线省略 elapsedMs 时不检查服务端时间；线上求解始终传入真实已用时间。 */
+export function assessChallengeBehavior(input: { angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null; formBehavior?: FormBehavior | null }, options?: { elapsedMs?: number }): BehaviorAssessment;
 export interface Pow { prefix: string; bits: number; expiresInMs: number }
 export interface TokenResult { token: string; expiresInMs: number; usableAfterMs: number }
 export interface Challenge { id: string; image: string; expiresInMs: number }

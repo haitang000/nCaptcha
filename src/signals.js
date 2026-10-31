@@ -90,23 +90,59 @@ export function analyzeTrajectory(points, isTouch) {
 }
 
 // 图片滑块可以自然地沿直线或短距离移动，不能套用出图前的弯曲度/60px 门槛。
-export function passesChallengeTrajectory(points) {
-  if (!Array.isArray(points) || points.length < 3) return false;
-  if (points.at(-1).t - points[0].t < 80) return false;
-  const segments = points.slice(1).map((point, i) => ({
-    distance: Math.hypot(point.x - points[i].x, point.y - points[i].y),
-    dt: point.t - points[i].t,
-  }));
-  if (segments.reduce((sum, segment) => sum + segment.distance, 0) < 1) return false;
-  // 同时具有完全固定的采样间隔和速度才拒绝，允许硬件的固定刷新节拍。
+const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+const spread = values => mean(values) ? (Math.max(...values) - Math.min(...values)) / mean(values) : 0;
+const cv = values => {
+  const average = mean(values);
+  return average ? Math.sqrt(mean(values.map(value => (value - average) ** 2))) / Math.abs(average) : 0;
+};
+
+export function assessChallengeTrajectory(points) {
+  if (!plausibleTrajectory(points, null)) return { passed: false, reasons: ['TRAJECTORY_INVALID'], metrics: {} };
+  const segments = points.slice(1).map((point, i) => {
+    const dx = point.x - points[i].x, dy = point.y - points[i].y, dt = point.t - points[i].t;
+    return { dx, dy, distance: Math.hypot(dx, dy), dt };
+  });
   const moving = segments.filter(segment => segment.distance > 0);
-  if (moving.length >= 5) {
-    const intervals = moving.map(segment => segment.dt), speeds = moving.map(segment => segment.distance / segment.dt);
-    const spread = values => (Math.max(...values) - Math.min(...values)) / (values.reduce((sum, value) => sum + value, 0) / values.length);
-    if (spread(intervals) < .01 && spread(speeds) < .01) return false;
+  const intervals = moving.map(segment => segment.dt), speeds = moving.map(segment => segment.distance / Math.max(segment.dt, .001));
+  const pathLength = segments.reduce((sum, segment) => sum + segment.distance, 0);
+  const directDistance = Math.hypot(points.at(-1).x - points[0].x, points.at(-1).y - points[0].y);
+  const durationMs = points.at(-1).t - points[0].t;
+  const accelerations = moving.slice(1).map((segment, i) => Math.abs(speeds[i + 1] - speeds[i]) / Math.max((segment.dt + moving[i].dt) / 2, .001));
+  const split = Math.max(1, Math.ceil(speeds.length * .8));
+  const earlySpeed = mean(speeds.slice(0, split)), lateSpeed = mean(speeds.slice(split));
+  // 只把高度重复的局部节律列为观察项，不因重复、直线、停顿或缺少修正单独拒绝。
+  let repeatedPattern = 0;
+  for (let period = 2; period <= 4; period++) {
+    if (moving.length < period * 4) continue;
+    if (moving.every((segment, i) => i < period ||
+      Math.abs(segment.dt - moving[i % period].dt) <= .001 &&
+      Math.abs(segment.dx - moving[i % period].dx) <= .001 && Math.abs(segment.dy - moving[i % period].dy) <= .001)) {
+      repeatedPattern = period; break;
+    }
   }
-  return true;
+  const metrics = {
+    points: points.length, movingSegments: moving.length, durationMs, pathLength, directDistance,
+    straightness: pathLength ? directDistance / pathLength : 0,
+    directionChanges: moving.slice(1).filter((segment, i) => segment.dx * moving[i].dx + segment.dy * moving[i].dy < 0).length,
+    pauses: segments.filter(segment => segment.dt >= 120 && segment.distance <= 1).length,
+    meanSpeed: mean(speeds), speedCv: cv(speeds), intervalCv: cv(intervals),
+    accelerationCv: cv(accelerations), meanAcceleration: mean(accelerations),
+    endSlowdown: lateSpeed > 0 ? Math.min(Number.MAX_VALUE, earlySpeed / lateSpeed) : 0, repeatedPattern,
+  };
+  const reasons = [];
+  if (points.length < 3) reasons.push('TRAJECTORY_TOO_SHORT');
+  if (durationMs < 80) reasons.push('TRAJECTORY_TOO_FAST');
+  if (pathLength < 1) reasons.push('TRAJECTORY_STATIONARY');
+  // 同时具有完全固定的采样间隔和速度才拒绝，允许硬件的固定刷新节拍。
+  if (moving.length >= 5 && spread(intervals) < .01 && spread(speeds) < .01) reasons.push('TRAJECTORY_MECHANICAL');
+  // 长直线中严格恒速，即使随机化采样时间仍可识别；短距离/少点数不适用。
+  if (!reasons.includes('TRAJECTORY_MECHANICAL') && moving.length >= 10 && durationMs >= 300 && pathLength >= 40 &&
+    metrics.straightness > .998 && spread(speeds) < .005) reasons.push('TRAJECTORY_CONSTANT_SPEED');
+  return { passed: !reasons.length, reasons, metrics };
 }
+
+export function passesChallengeTrajectory(points) { return assessChallengeTrajectory(points).passed; }
 
 export function passesKeyboardBehavior(data, angle, elapsedMs, pointerPasses) {
   if (!data || typeof data !== 'object' || Array.isArray(data) || !Number.isInteger(data.startAngle) || data.startAngle < 0 || data.startAngle > 359) return false;
@@ -141,8 +177,8 @@ export function analyzeFormBehavior(data) {
   const fields = Object.values(data.fields ?? {});
   const totalKeystrokes = fields.reduce((s, f) => s + (f.n || 0), 0);
   if (totalKeystrokes < 3) return 0;
-  // 我们的表单最多两三个输入框，报出 8 个以上焦点切换只能是脚本编的
-  if (data.focusOrder?.length > 8) return 0;
+  // 长表单或返回前一个字段也会产生多次焦点切换；与采集端共用 32 条上限。
+  if (data.focusOrder?.length > 32) return 0;
 
   let score = 0;
   if (data.totalMs > 3000) score += 1;

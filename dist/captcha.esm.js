@@ -98,14 +98,19 @@ function createTracking(anchor, form) {
     for (const [i, input] of [...form.querySelectorAll("input, textarea")].slice(0, 32).entries()) {
       const name = `field${i}`;
       const init = () => {
-        if (!fields.has(name)) {
-          fields.set(name, { n: 0, last: 0, sum: 0, sumSq: 0 });
-          focusOrder.push(name);
-        }
+        if (!fields.has(name)) fields.set(name, { n: 0, last: 0, sum: 0, sumSq: 0 });
         return fields.get(name);
       };
-      listen(input, "focus", init);
+      const focus = () => {
+        init();
+        if (focusOrder.at(-1) !== name) {
+          focusOrder.push(name);
+          if (focusOrder.length > 32) focusOrder.shift();
+        }
+      };
+      listen(input, "focus", focus);
       listen(input, "input", () => {
+        focus();
         const field = init(), time = performance.now();
         if (field.n >= 1e5) return;
         if (field.n) {
@@ -147,7 +152,7 @@ function createTracking(anchor, form) {
         const mean = f.sum / (f.n - 1);
         result[name] = { n: f.n, meanGap: Math.round(mean), varGap: Math.round(Math.max(0, f.sumSq / (f.n - 1) - mean ** 2)) };
       }
-      return Object.values(result).reduce((n, f) => n + f.n, 0) >= 3 ? { fields: result, totalMs: Math.round(performance.now() - startedAt), focusOrder } : null;
+      return Object.values(result).reduce((n, f) => n + f.n, 0) >= 3 ? { fields: result, totalMs: Math.round(performance.now() - startedAt), focusOrder: [...focusOrder] } : null;
     },
     cleanup() {
       listeners.abort();

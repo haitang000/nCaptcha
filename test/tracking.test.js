@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createChallengeTracking } from '../src/client/tracking.js';
+import { createChallengeTracking, createTracking } from '../src/client/tracking.js';
 import { passesKeyboardBehavior } from '../src/signals.js';
 
 test('图片轨迹按轮次隔离，限制点数，正确识别输入方式并清理监听', t => {
@@ -31,4 +31,26 @@ test('图片轨迹按轮次隔离，限制点数，正确识别输入方式并�
   tracking.cleanup();
   event('pointermove', { clientX: 10, clientY: 10, pointerType: 'mouse' });
   assert.deepEqual(tracking.snapshot(), { pointer: 'keyboard', trajectory: null, keyboard: null });
+});
+
+test('表单评测记录实际焦点往返且有界，不采集内容并隔离快照', t => {
+  let time = 0;
+  t.mock.method(performance, 'now', () => time);
+  const doc = new EventTarget();
+  doc.defaultView = { matchMedia: () => ({ matches: false }), PointerEvent: Event };
+  const inputs = [new EventTarget(), new EventTarget()];
+  const tracking = createTracking({ ownerDocument: doc }, { querySelectorAll: () => inputs });
+  t.after(() => tracking.cleanup());
+  const dispatch = (i, type) => { time += 100; inputs[i].dispatchEvent(new Event(type)); };
+  dispatch(0, 'focus'); dispatch(0, 'input'); dispatch(0, 'input');
+  dispatch(1, 'focus'); dispatch(1, 'input'); dispatch(1, 'input'); dispatch(0, 'focus');
+  const first = tracking.getFormBehavior();
+  assert.deepEqual(first.focusOrder, ['field0', 'field1', 'field0']);
+  assert.equal(first.fields.field0.n, 2); assert.equal(first.fields.field0.meanGap, 100);
+  assert.deepEqual(Object.keys(first.fields.field0).sort(), ['meanGap', 'n', 'varGap']);
+  for (let i = 0; i < 50; i++) dispatch(i % 2, 'focus');
+  const last = tracking.getFormBehavior();
+  assert.equal(last.focusOrder.length, 32); assert.equal(first.focusOrder.length, 3);
+  tracking.cleanup(); dispatch(0, 'input');
+  assert.equal(tracking.getFormBehavior(), null);
 });

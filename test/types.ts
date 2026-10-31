@@ -1,4 +1,4 @@
-import { createCaptcha, createMemoryStore, type CaptchaStore, type TokenResult } from 'portable-captcha';
+import { createCaptcha, createMemoryStore, assessChallengeBehavior, type BehaviorAssessment, type CaptchaStore, type TokenResult } from 'portable-captcha';
 import { createHttpHandler, createExpressMiddleware } from 'portable-captcha/http';
 import { render, type Widget } from 'portable-captcha/client';
 const store: CaptchaStore = createMemoryStore();
@@ -7,6 +7,9 @@ createHttpHandler(engine, { secret: 'x'.repeat(32), allowedOrigins: ['https://ex
 createExpressMiddleware(engine);
 const widget: Widget = render(document.body, { onSuccess(token) { token.toUpperCase(); }, onStateChange(state) { console.log(state); } });
 const context = { ip: '127.0.0.1', action: 'login' };
+const assessment: BehaviorAssessment = assessChallengeBehavior({ angle: 0, pointer: 'keyboard', keyboard: { startAngle: 0, events: [{ key: 'Enter', control: 'range', t: 100 }] } }, { elapsedMs: 200 });
+const passed: boolean = assessment.passed;
+const metric: number | boolean = assessment.dimensions.keyboard.metrics.events;
 const pow = await engine.createPow(context);
 const result = await engine.verifyBehavior({ ...context, pow: { prefix: pow.prefix, nonce: '1' } });
 if ('token' in result) { const token: TokenResult = result; await engine.consumeToken({ ...context, token: token.token }); }

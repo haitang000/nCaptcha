@@ -26,12 +26,13 @@ await fs.writeFile(path.join(directory, 'verify.mjs'), `
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { createCaptcha, createMemoryStore } from 'portable-captcha';
+import { createCaptcha, createMemoryStore, assessChallengeBehavior } from 'portable-captcha';
 import { createHttpHandler } from 'portable-captcha/http';
 const memory = createMemoryStore();
 let answer;
 const store = { ...memory, async set(key, value, ttl) { if (key.includes(':challenge:')) answer = value.answer; return memory.set(key, value, ttl); } };
 const c = createCaptcha({ store, powBits:0, minSolveMs:0, minTokenAgeMs:0 });
+assert.equal(assessChallengeBehavior({angle:0,trajectory:[{x:0,y:0,t:0},{x:1,y:0,t:45},{x:2,y:0,t:130}]},{elapsedMs:1000}).passed,true);
 const handler = createHttpHandler(c);
 const server = http.createServer(async (req,res)=>{ if (!await handler(req,res)) { res.writeHead(404);res.end(); } });
 server.listen(0,'127.0.0.1'); await once(server,'listening');

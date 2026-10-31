@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { isIP } from 'node:net';
 import { obscurePuzzle, rotatePuzzleToPng } from './image-codec.js';
-import { validSignals, passesChallengeTrajectory, passesKeyboardBehavior } from './signals.js';
+import { validSignals } from './signals.js';
+import { assessChallengeBehavior } from './assessment.js';
 import { normalizeIp } from './ip.js';
 import { createMemoryStore } from './store.js';
 import { CaptchaError, invalid } from './error.js';
@@ -131,8 +132,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
         if (now() - record.createdAt < config.minSolveMs) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'TOO_FAST', retryAfterMs: config.minSolveMs - (now() - record.createdAt) } };
         const tolerance = config.tolerance;
         const elapsedMs = now() - record.createdAt;
-        const pointerPasses = !!trajectory && trajectory[0].t === 0 && trajectory.at(-1).t <= elapsedMs + 250 && passesChallengeTrajectory(trajectory);
-        const behaviorPasses = pointer === 'keyboard' ? passesKeyboardBehavior(keyboard, angle, elapsedMs, pointerPasses) : pointerPasses;
+        const behaviorPasses = assessChallengeBehavior({ angle, pointer, trajectory, hints, keyboard }, { elapsedMs }).passed;
         if (behaviorPasses && Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { success: true, releaseIp: record.ip } };
         record.tries--;
         const code = !record.tries ? 'CHALLENGE_EXHAUSTED' : behaviorPasses ? 'ANGLE_INCORRECT' : 'BEHAVIOR_REJECTED';

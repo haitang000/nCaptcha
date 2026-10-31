@@ -50,6 +50,7 @@
     "workers:check": "wrangler deploy --dry-run --outdir .workers/bundle",
     "workers:deploy": "wrangler deploy",
     "test": "node --test test/*.test.js",
+    "test:assessment": "node scripts/evaluate-behavior.js",
     "test:browser": "playwright test",
     "test:workers": "node --test test/workers/*.test.js",
     "test:types:workers": "tsc --noEmit --strict --module NodeNext --target ES2022 --lib ES2022 --types @cloudflare/workers-types test/types-workers.ts",

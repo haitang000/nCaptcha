@@ -236,8 +236,38 @@ Content-Type: application/json
 
 ## 验证与打包
 
+新增多维行为评测接口 `assessChallengeBehavior(input, { elapsedMs })`，返回 `passed`、`reasons` 和各维度的 `status/metrics`。服务端图片求解使用同一评估逻辑；详细报告仅供后端或离线分析，公开验证码接口仍返回原有结果和错误码。
+
+| 维度 | 指标或检查 |
+| --- | --- |
+| 数据完整性 `integrity` | 数值、点数、设备提示与表单数据格式 |
+| 时间一致性 `timing` | 轨迹零基点、操作时长、服务端已用时间与 250ms 容差 |
+| 路径 `motion` | 路程、位移、直线程度、方向修正、静止与短操作 |
+| 运动变化 `dynamics` | 速度波动、加速度波动、末端减速、机械匀速与抖动采样下的严格恒速 |
+| 操作节律 `rhythm` | 采样间隔波动、停顿、重复局部节律 |
+| 键盘 `keyboard` | 按键重放、最终角度、方向修正、指针混合输入 |
+| 环境 `environment` | 设备提示与输入方式一致性；缺失信息保持中性 |
+| 表单 `form` | 输入次数、输入间隔、节拍波动、实际焦点往返与填写耗时 |
+
+`status` 为 `pass/fail/info/unavailable`；`info` 仅观察，`unavailable` 表示无该项数据。环境差异、自动填充、直线滑动、停顿和重复节律不会单独导致拒绝。表单只采集时间与匿名字段序号，焦点记录最多保留 32 条，不采集输入内容。短距离或少点数操作不适用新增的长直线严格恒速检查。
+
+```js
+import { assessChallengeBehavior } from 'portable-captcha';
+
+const assessment = assessChallengeBehavior({
+  angle: 9,
+  trajectory: [{ x: 0, y: 0, t: 0 }, { x: 1, y: 0, t: 45 }, { x: 2, y: 0, t: 130 }],
+}, { elapsedMs: 1500 }); // 线上必须使用服务端记录的挑战已用时间
+console.log(assessment.passed, assessment.dimensions.dynamics.metrics);
+```
+
+运行 `npm run test:assessment` 生成 [Markdown 评测报告](test-results/assessment/report.md) 和 [JSON 明细](test-results/assessment/report.json)，也可加 `-- --output-dir <目录>` 自定义输出位置。内置 26 个合成场景，覆盖鼠标、触屏、笔、短距离微调、固定刷新率、越过目标后回调、停顿、纯键盘、混合输入、自动填充、异常时间、机械轨迹和已知可伪造样本；报告包含逐维结果、场景结果和本机评估函数的 P50/P95 耗时。回归预期不匹配时命令返回非零退出码。
+
+这些合成样本用于检查兼容性和回归，不能据此推算真实用户误拒率或完整验证码的攻破率。脚本重放自然轨迹仍可能通过行为检查；`passed` 不是“真人概率”，不能单独授权。PoW、图片答案、服务端等待、限流与一次性令牌检查仍须全部通过。离线省略 `elapsedMs` 时，报告会标明未核对服务端时间。
+
 ```powershell
 npm test
+npm run test:assessment
 npm run test:types
 npx playwright install chromium
 npm run test:browser
