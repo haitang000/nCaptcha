@@ -167,9 +167,13 @@ export function createCaptchaCore(options = {}, loadPictures) {
       if (!config.enabled) { await reputation(ctx.ip, true); throw botDetected(); }
       const { pow, trajectory = null, formBehavior = null, hints = null } = input;
       if (!pow || typeof pow.prefix !== 'string' || !/^[a-f0-9]{32}$/.test(pow.prefix) || typeof pow.nonce !== 'string' || !/^\d{1,32}$/.test(pow.nonce)) throw invalid('PoW 数据格式不正确');
-      const accepted = await store.update(key('pow', pow.prefix), record => ({
-        value: undefined, result: record && same(record, ctx) && zeroBits(crypto.createHash('sha256').update(pow.prefix + pow.nonce).digest()) >= record.bits ? record : null,
-      }));
+      // 先校验绑定：IP 或用途不符的请求只拒绝，不消耗也不销毁原上下文持有的 PoW。
+      const accepted = await store.update(key('pow', pow.prefix), record => {
+        if (!record) return { result: null };
+        if (!same(record, ctx)) return { value: record, ttlMs: record.expiresAt - now(), result: null };
+        if (zeroBits(crypto.createHash('sha256').update(pow.prefix + pow.nonce).digest()) < record.bits) return { result: null };
+        return { result: record };
+      });
       if (!accepted) {
         const source = await agentLures.source(ctx, pow.prefix);
         if (source) throw botDetected(source);
@@ -191,7 +195,8 @@ export function createCaptchaCore(options = {}, loadPictures) {
       if (!agentDetected && !validSignals(trajectory, null, hints)) { await reputation(ctx.ip, true); throw invalid(); }
       const result = await store.update(key('challenge', id), record => {
         if (!record) return { result: { code: 'CHALLENGE_EXPIRED' } };
-        if (!same(record, ctx)) return { result: { code: 'BINDING_MISMATCH', releaseIp: record.ip } };
+        // 绑定不符只拒绝本次请求：保留挑战、剩余次数与 IP 名额，避免他人借此销毁有效挑战。
+        if (!same(record, ctx)) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'BINDING_MISMATCH' } };
         if (record.agentDetected) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'BOT_DETECTED', source: record.agentDetected } };
         if (agentDetected) return { result: { code: 'BOT_DETECTED', releaseIp: record.ip } };
         if (now() - record.createdAt < config.minSolveMs) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'TOO_FAST', retryAfterMs: config.minSolveMs - (now() - record.createdAt) } };
