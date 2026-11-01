@@ -7,6 +7,7 @@
 ## ⚡ 核心特性
 
 - **多重防御体系**：前端自适应 PoW 难度门槛 + 像素级防侧信道题图回正 + 轨迹行为动力学检验（检测机械恒速、异常停顿与重放）。
+- **请求环境评定**：浏览器视口与屏幕尺寸、时区与时差、实际请求头、语言一致性及服务端请求频率共同形成风险分，动态增加 PoW 难度。
 - **Agent 指令蜜罐**：在隐藏 DOM 中提供自动化操作指引，遵循指引的 agent 会主动触发机器人标记，服务端拒绝本轮验证。
 - **一次性强绑定令牌**：Token 强绑定真实 IP 与 Action，限制最短求解耗时，必须由业务后端 `/siteverify` 消费。
 - **现代化组件**：Shadow DOM 隔离，圆形预览、胶囊滑块、自适应深浅色模式，完整支持触控、鼠标与全键盘操作。
@@ -163,7 +164,7 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 
 | 路径 | 访问权限 | 说明 |
 | :--- | :--- | :--- |
-| `GET /captcha/v1/pow?action=...` | 公开 | 获取 PoW 题目 |
+| `POST /captcha/v1/pow` | 公开 | 携带 `action`、`hints` 获取自适应 PoW；兼容原有 `GET /pow?action=...` |
 | `POST /captcha/v1/verify` | 公开 | 提交 PoW，换取图片挑战 |
 | `POST /captcha/v1/challenge` | 公开 | 提交回正角度与交互轨迹 |
 | `POST /captcha/v1/cancel` | 公开 | 取消并释放题目 |
@@ -182,6 +183,30 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 | `minSolveMs` | `CAPTCHA_MIN_SOLVE_MS` | `1000` | 最短求解耗时 (ms)，防脚本瞬发 |
 | `tokenTtlMs` | `CAPTCHA_TOKEN_TTL_MS` | `300000` | 令牌有效期 (5 分钟) |
 | `rateLimit` | `CAPTCHA_RATE_LIMIT` | `60` / 10m | 单 IP 请求频次上限 |
+
+### 浏览器与请求环境评定
+
+组件在获取 PoW、提交行为和图片答案时采集浏览器提示：`sw/sh`（屏幕）、`vw/vh`（当前布局视口）、`dpr`（像素比）、`tz`（`getTimezoneOffset()` 分钟值）、`timeZone`（IANA 时区名称）、`lang`（语言列表）和输入方式。视口按每次请求重新读取，支持窗口缩放、移动端布局视口和分屏。时区名称与时差按服务端当前日期核对，包含夏令时和非整点时区；不根据语言推断用户地域。
+
+Node HTTP、Express 和 Web Fetch / Workers 适配器从实际请求提取 `User-Agent`、`Accept`、`Accept-Language`、`Sec-Fetch-*` 与 `Sec-CH-UA-Mobile`。请求体伪造的 `requestHeaders` 不会覆盖实际请求头。评定检查自动化 UA 特征、请求元数据矛盾及浏览器语言与请求语言是否有共同语种；缺少 Fetch Metadata、语言区域差异、多语言、隐私设置或单项缺失不会单独拒绝验证。请求头和浏览器提示仍可被自动化程序伪造。
+
+请求频率直接复用真实 IP 的原子限流记录，包含配置窗口内的次数、配额利用率和最近 10 秒的突发次数；窗口短于 10 秒时使用较短窗口。所有 action 共用同 IP 记录，包含当前请求，不采用请求体自报频率。至少累计 12 次请求后，窗口利用率达到 50% 才计入频率风险；突发阈值为 `max(12, ceil(rateLimit * 25%))`。不足 12 次的少量请求不会因频率额外加难度，超过原有配额继续返回 HTTP 429 和 `Retry-After`。
+
+规则风险分范围为 0–100：低于 25 保持原难度，25–49 额外增加 1 位 PoW，50 及以上增加 2 位，与 IP 信誉和失败次数的惩罚叠加，总难度仍不超过 28 位。此分数不是机器人概率。环境差异只调整获取题目时的计算成本，图片答案、行为校验、最短等待和一次性令牌要求继续执行。旧客户端不提供新增提示也可验证，全部来源缺失时报告 `unknown`。
+
+可通过导出的 `assessRequestContext(hints, options)` 单独评定，或通过 `assessChallengeBehavior(input, options)` 一并获取新增的 `browser`、`timezone`、`headers`、`frequency`、`language` 五个维度和 `risk`。`options` 可提供 `requestHeaders`、`frequency`、`nowMs`，便于离线重放；直接嵌入核心时，这些请求头应由业务服务端从真实请求提取。
+
+```javascript
+import { assessRequestContext } from 'portable-captcha';
+
+const report = assessRequestContext(
+  { sw: 1920, sh: 1080, vw: 1200, vh: 800, dpr: 1, tz: 0, timeZone: 'UTC', lang: ['zh-CN'] },
+  { requestHeaders: { 'user-agent': 'Mozilla/5.0', 'accept-language': 'zh-CN,zh;q=0.9' }, nowMs: Date.now() }
+);
+console.log(report.risk); // { score: 0, level: 'low', signals: [], powBits: 0 }
+```
+
+PoW、挑战和令牌的服务端状态仅保存数值指标、布尔结果及风险原因，保留本轮最高风险报告，随原记录 TTL 到期；不保存 Cookie、Authorization、原始请求头、时区名称或语言列表。公开验证码响应不返回详细评分。
 
 ### IP 信誉检测：Blackbox 与 Cloudflare Tunnel
 

@@ -1,4 +1,4 @@
-import { createCaptcha, createMemoryStore, assessChallengeBehavior, type BehaviorAssessment, type CaptchaStore, type TokenResult } from 'portable-captcha';
+import { createCaptcha, createMemoryStore, assessChallengeBehavior, assessRequestContext, type BehaviorAssessment, type CaptchaStore, type TokenResult, type RequestAssessment } from 'portable-captcha';
 import { createHttpHandler, createExpressMiddleware } from 'portable-captcha/http';
 import { render, type Widget } from 'portable-captcha/client';
 const store: CaptchaStore = createMemoryStore();
@@ -19,6 +19,10 @@ const context = { ip: '127.0.0.1', action: 'login' };
 const assessment: BehaviorAssessment = assessChallengeBehavior({ angle: 0, pointer: 'keyboard', keyboard: { startAngle: 0, events: [{ key: 'Enter', control: 'range', t: 100 }] } }, { elapsedMs: 200 });
 const passed: boolean = assessment.passed;
 const metric: number | boolean = assessment.dimensions.keyboard.metrics.events;
+const requestAssessment: RequestAssessment = assessRequestContext({ dpr: 1, sw: 1920, sh: 1080, vw: 1200, vh: 800, timeZone: 'UTC', tz: 0, lang: ['en'] },
+  { requestHeaders: { 'accept-language': 'en-US' }, nowMs: Date.now(), frequency: { count: 1, burstCount: 1, windowMs: 600000, burstWindowMs: 10000, limit: 60 } });
+const riskScore: number = requestAssessment.risk.score;
+await engine.createPow({ ...context, hints: { dpr: 1, sw: 1920, sh: 1080, tz: 0, lang: ['en'] }, requestHeaders: { 'user-agent': 'browser' } });
 const pow = await engine.createPow(context);
 if (pow.agent) {
   const ticket: string = pow.agent.ticket;

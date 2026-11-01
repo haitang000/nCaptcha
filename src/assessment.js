@@ -1,14 +1,16 @@
 import { assessChallengeTrajectory, passesKeyboardBehavior, validSignals } from './signals.js';
 import { keyboardAngle } from './client/keyboard.js';
+import { assessRequestContext } from './request-assessment.js';
 
 const dimension = (status = 'unavailable', metrics = {}) => ({ status, metrics });
 
 /** 可离线重放的行为评测。结果不代表真人概率，也不能替代 PoW、图片答案或一次性令牌。 */
-export function assessChallengeBehavior(input, { elapsedMs } = {}) {
+export function assessChallengeBehavior(input, { elapsedMs, requestHeaders, frequency, nowMs } = {}) {
   if (elapsedMs !== undefined && (!Number.isFinite(elapsedMs) || elapsedMs < 0)) throw new TypeError('elapsedMs 必须为非负有限数');
-  const dimensions = Object.fromEntries(['integrity', 'timing', 'motion', 'dynamics', 'rhythm', 'keyboard', 'environment', 'form'].map(name => [name, dimension()]));
+  const dimensions = Object.fromEntries(['integrity', 'timing', 'motion', 'dynamics', 'rhythm', 'keyboard', 'environment', 'form', 'browser', 'timezone', 'headers', 'frequency', 'language'].map(name => [name, dimension()]));
+  let risk = { score: 0, level: 'unknown', signals: [], powBits: 0 };
   const reasons = [];
-  const result = () => ({ passed: !reasons.length, reasons, dimensions });
+  const result = () => ({ passed: !reasons.length, reasons, dimensions, risk });
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     dimensions.integrity = dimension('fail'); reasons.push('SIGNALS_INVALID'); return result();
   }
@@ -17,6 +19,9 @@ export function assessChallengeBehavior(input, { elapsedMs } = {}) {
     dimensions.integrity = dimension('fail'); reasons.push('SIGNALS_INVALID'); return result();
   }
   dimensions.integrity = dimension('pass');
+  const request = assessRequestContext(hints, { requestHeaders, frequency, nowMs, pointer });
+  Object.assign(dimensions, request.dimensions);
+  risk = request.risk;
   let pointerPasses = false;
   if (trajectory) {
     const motion = assessChallengeTrajectory(trajectory), m = motion.metrics;

@@ -3,6 +3,24 @@ import assert from 'node:assert/strict';
 import { createChallengeTracking, createTracking } from '../src/client/tracking.js';
 import { passesKeyboardBehavior } from '../src/signals.js';
 
+test('浏览器提示采集实际视口、屏幕、时区和语言，变化后刷新且 Intl 不可用时兼容', t => {
+  const doc = new EventTarget();
+  const win = { PointerEvent: Event, matchMedia: () => ({ matches: false }), devicePixelRatio: 2, screen: { width: 1920, height: 1080 },
+    innerWidth: 1200, innerHeight: 800, navigator: { languages: ['zh-CN', 'en'], language: 'zh-CN' }, Intl,
+    Date: class { getTimezoneOffset() { return -480; } } };
+  doc.defaultView = win;
+  const tracking = createTracking({ ownerDocument: doc }); t.after(() => tracking.cleanup());
+  const first = tracking.getHints();
+  assert.equal(first.vw, 1200); assert.equal(first.vh, 800); assert.equal(first.sw, 1920); assert.equal(first.tz, -480);
+  assert.equal(first.timeZone, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  win.innerWidth = 600; win.navigator.languages.push('de');
+  assert.equal(tracking.getHints().vw, 600); assert.equal(first.lang.length, 2);
+  win.Intl = { DateTimeFormat() { throw new Error('unavailable'); } };
+  assert.equal(tracking.getHints().timeZone, undefined);
+  win.Intl = undefined;
+  assert.equal(tracking.getHints().timeZone, undefined);
+});
+
 test('图片轨迹按轮次隔离，限制点数，正确识别输入方式并清理监听', t => {
   let time = 0;
   t.mock.method(performance, 'now', () => time);

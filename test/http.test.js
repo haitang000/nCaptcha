@@ -16,6 +16,24 @@ async function serverFor(t, options = {}, httpOptions = {}) {
   async function post(path, data, headers = {}) { return fetch(base + '/captcha/v1' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(data) }); }
   return { ...f, base, post };
 }
+
+test('HTTP POST PoW 接收环境提示，只采用实际请求头和服务端频率并隐藏报告', async t => {
+  const f = await serverFor(t);
+  const hints = { dpr: 1, sw: 1920, sh: 1080, vw: 1000, vh: 800, tz: 0, timeZone: 'UTC', lang: ['zh-CN'] };
+  const body = { action: 'login', hints, requestHeaders: { 'user-agent': 'Mozilla/5.0', 'accept-language': 'zh' }, frequency: { count: 0 }, nowMs: 0 };
+  const response = await f.post('/pow', body, { 'User-Agent': 'curl/8.0', 'Accept-Language': 'de' });
+  assert.equal(response.status, 200);
+  const pow = await response.json();
+  assert.equal(pow.bits, 4); assert.equal(pow.requestAssessment, undefined);
+  const record = [...f.records.values()].find(r => r.bits !== undefined && r.agentTicket === pow.prefix);
+  assert.ok(record.requestAssessment.risk.signals.includes('AUTOMATION_USER_AGENT'));
+  assert.ok(record.requestAssessment.risk.signals.includes('LANGUAGE_MISMATCH'));
+  assert.equal(record.requestAssessment.dimensions.frequency.metrics.count, 1);
+  const forgedRisk = await (await f.post('/pow', { ...body, requestHeaders: { 'user-agent': 'curl/8', 'accept-language': 'de' } }, { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'zh' })).json();
+  assert.equal(forgedRisk.bits, 3, '请求体无法伪造服务端请求头');
+  const invalid = await f.post('/pow', { ...body, hints: { ...hints, vw: -1 } });
+  assert.equal(invalid.status, 400); assert.equal((await invalid.json()).code, 'INVALID_INPUT');
+});
 test('HTTP 完整严格验证 → 等待 → 后端带密钥核验 → 重放失败', async t => {
   const f = await serverFor(t, { minTokenAgeMs: 300 });
   const pow = await (await fetch(f.base + '/captcha/v1/pow?action=login')).json();

@@ -5,6 +5,25 @@ import { fixture, nonceFor, challengeTrajectory } from './helpers.js';
 
 const secret = 'worker-secret-for-backend-only-1234567';
 const context = { ip: '192.0.2.4', action: 'login' };
+
+test('Web POST PoW、verify 和 challenge 只使用实际头，频率由核心统计', async t => {
+  const f = fixture(); t.after(() => f.close());
+  const inputs = [];
+  const observed = Object.fromEntries(['createPow', 'verifyBehavior', 'solveChallenge'].map(method => [method, input => { inputs.push(input); return f.captcha[method](input); }]));
+  const handle = createFetchHandler(observed, { getIp: () => context.ip });
+  const hints = { dpr: 1, sw: 1920, sh: 1080, vw: 1000, vh: 800, tz: 0, timeZone: 'UTC', lang: ['zh-CN'] };
+  const post = (path, body) => handle(new Request('https://captcha.example/captcha/v1' + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': 'curl/8', 'Accept-Language': 'de', Cookie: 'private', Authorization: 'private' },
+    body: JSON.stringify({ ...body, requestHeaders: { 'user-agent': 'Mozilla/5.0', 'accept-language': 'zh' }, frequency: { count: 0 } }),
+  }));
+  const pow = await (await post('/pow', { action: 'login', hints })).json();
+  assert.equal(pow.bits, 4);
+  const { challenge } = await (await post('/verify', { action: 'login', hints, pow: { prefix: pow.prefix, nonce: nonceFor(pow) } })).json();
+  const result = await (await post('/challenge', { action: 'login', hints, id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory })).json();
+  assert.ok(result.token);
+  assert.ok(inputs.every(input => input.requestHeaders['user-agent'] === 'curl/8' && !('cookie' in input.requestHeaders) && !('authorization' in input.requestHeaders)));
+  assert.equal(result.risk, undefined); assert.equal(result.requestAssessment, undefined);
+});
 test('Web 备用接口支持自定义路径，GET 不消费票据，禁止来源与伪造 IP 无效', async t => {
   const f = fixture(); t.after(() => f.close());
   const handle = createFetchHandler(f.captcha, { basePath: '/custom', getIp: () => context.ip, allowedOrigins: ['https://app.example'] });

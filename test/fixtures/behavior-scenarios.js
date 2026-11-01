@@ -15,6 +15,8 @@ for (let i = 0; i < 16; i++) {
   periodic.push({ x: last.x + (even ? 5 : 15), y: 100, t: last.t + (even ? 20 : 40) });
 }
 const scenario = (id, name, group, label, expectedPass, input, extra = {}) => ({ id, name, group, label, expectedPass, input: { angle: 9, ...input }, elapsedMs: 3000, ...extra });
+const hints = { dpr: 2, sw: 1920, sh: 1080, vw: 1200, vh: 800, tz: 0, timeZone: 'UTC', lang: ['zh-CN'] };
+const requestHeaders = { 'user-agent': 'Mozilla/5.0', 'accept-language': 'zh-CN', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' };
 export const behaviorScenarios = [
   scenario('mouse', '鼠标自然加减速', '输入兼容', 'human-like', true, { trajectory: natural }),
   scenario('touch', '触屏拖动', '输入兼容', 'human-like', true, { pointer: 'touch', trajectory: natural }),
@@ -27,6 +29,16 @@ export const behaviorScenarios = [
   scenario('mixed', '指针与键盘混合输入', '无障碍', 'human-like', true, { pointer: 'keyboard', trajectory: natural, keyboard }),
   scenario('autofill', '自动填充和缺失设备提示', '环境与表单', 'human-like', true, { trajectory: natural, formBehavior: { totalMs: 50, fields: { field0: { n: 1, meanGap: 0, varGap: 0 } }, focusOrder: ['field0'] } }),
   scenario('environment', '设备提示与实际输入不同', '环境与表单', 'human-like', true, { trajectory: natural, hints: { dpr: 2, sw: 1024, sh: 768, tz: -480, lang: ['zh-CN'], pointer: 'touch', coarse: true } }),
+  scenario('context-normal', '视口、时区和请求头一致', '请求环境', 'human-like', true, { trajectory: natural, hints },
+    { assessmentOptions: { requestHeaders }, expectedRisk: 'low' }),
+  scenario('context-language', '语言偏好差异保留完整验证', '请求环境', 'human-like', true, { trajectory: natural, hints },
+    { assessmentOptions: { requestHeaders: { ...requestHeaders, 'accept-language': 'de' } }, expectedRisk: 'low' }),
+  scenario('context-timezone', '时区名称与时差不一致', '请求环境', 'scripted', true, { trajectory: natural, hints: { ...hints, tz: 480 } },
+    { assessmentOptions: { requestHeaders }, expectedRisk: 'low', limitation: '单项时区差异仅记录风险，不单独拒绝验证。' }),
+  scenario('context-combined', '自动化请求头叠加时区差异', '请求环境', 'scripted', true, { trajectory: natural, hints: { ...hints, tz: 480 } },
+    { assessmentOptions: { requestHeaders: { 'user-agent': 'curl/8', 'accept-language': 'de' } }, expectedRisk: 'high', limitation: '环境风险提高签发 PoW 的计算难度，不代替图片和行为检查。' }),
+  scenario('context-burst', '短时突发叠加高窗口利用率', '请求环境', 'scripted', true, { trajectory: natural, hints },
+    { assessmentOptions: { requestHeaders, frequency: { count: 55, burstCount: 20, limit: 60, windowMs: 600000, burstWindowMs: 10000 } }, expectedRisk: 'high', limitation: '频率快照由服务端原子限流提供，超过配额仍返回 429。' }),
   scenario('no-motion', '缺失轨迹', '结构与时间', 'scripted', false, {}),
   scenario('stationary', '静止点冒充操作', '结构与时间', 'scripted', false, { trajectory: natural.map(p => ({ ...p, x: 100, y: 200 })) }),
   scenario('too-fast', '过短操作', '结构与时间', 'scripted', false, { trajectory: natural.map(p => ({ ...p, t: p.t / 10 })) }),

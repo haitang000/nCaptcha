@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import fs from 'node:fs/promises';
 import { CaptchaError } from './error.js';
 import { normalizeIp, cloudflareClientIp } from './ip.js';
+import { pickRequestHeaders } from './request-assessment.js';
 
 const assetNames = new Set(['captcha.js', 'captcha.esm.js', 'captcha.css', 'pow-worker.js']);
 export function getClientIp(req, trustedProxies = [], clientIpHeader = 'x-forwarded-for') {
@@ -86,13 +87,15 @@ export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, a
         sendJson(res, 200, { success }); return true;
       }
       const ip = getClientIp(req, trustedProxies, clientIpHeader);
-      if (route === '/pow' && req.method === 'GET') {
-        sendJson(res, 200, await captcha.createPow({ ip, action: url.searchParams.get('action') ?? 'default' })); return true;
+      const requestHeaders = pickRequestHeaders(req.headers);
+      if (route === '/pow' && ['GET', 'POST'].includes(req.method)) {
+        const body = req.method === 'POST' ? await readJson(req) : {};
+        sendJson(res, 200, await captcha.createPow({ ip, action: body.action ?? url.searchParams.get('action') ?? 'default', hints: body.hints, requestHeaders })); return true;
       }
       const methods = { '/verify': 'verifyBehavior', '/challenge': 'solveChallenge', '/cancel': 'cancelChallenge', '/compat': 'reportAgent' };
       if (methods[route] && req.method === 'POST') {
         const body = await readJson(req);
-        const result = await captcha[methods[route]]({ ...body, ip });
+        const result = await captcha[methods[route]]({ ...body, ip, requestHeaders });
         sendJson(res, 200, route === '/cancel' ? { cancelled: result } : result); return true;
       }
       throw new CaptchaError('NOT_FOUND', '验证码接口不存在或请求方法不正确', 404);

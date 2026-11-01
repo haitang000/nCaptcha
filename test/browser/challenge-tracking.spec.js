@@ -37,12 +37,20 @@ async function drag(page, challenge, isMobile, offset = 0) {
 }
 
 test('图片阶段鼠标/触屏轨迹随答案提交并由真实服务端验证', async ({ page, isMobile }) => {
+  const proofResponse = page.waitForResponse(r => r.url().includes('/captcha/v1/pow?'));
   const challenge = await start(page);
+  const proof = (await proofResponse).request();
+  expect(proof.method()).toBe('POST');
+  const expected = await page.evaluate(() => ({ vw: innerWidth, vh: innerHeight, sw: screen.width, sh: screen.height,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, tz: new Date().getTimezoneOffset(), lang: [...navigator.languages].slice(0, 8) }));
+  expect(proof.postDataJSON().hints).toMatchObject(expected);
+  expect(proof.postDataJSON().requestHeaders).toBeUndefined();
   const response = page.waitForResponse(r => r.url().endsWith('/captcha/v1/challenge'));
   await drag(page, challenge, isMobile);
   const submitted = await response, body = submitted.request().postDataJSON();
   expect(submitted.status()).toBe(200);
   expect(body.pointer).toBe(isMobile ? 'touch' : 'mouse'); expect(body.hints.pointer).toBe(body.pointer);
+  expect(body.hints.vw).toBeGreaterThan(0); expect(body.hints.vh).toBeGreaterThan(0); expect(typeof body.hints.timeZone).toBe('string');
   expect(body.trajectory.length).toBeGreaterThanOrEqual(3); expect(body.trajectory.length).toBeLessThanOrEqual(100);
   expect(body.trajectory[0].t).toBe(0); expect(body.trajectory.at(-1).t).toBeGreaterThanOrEqual(80);
   expect(body.trajectory.every((p, i) => (p.x !== 5 || p.y !== 5) && (!i || p.t > body.trajectory[i - 1].t))).toBe(true);

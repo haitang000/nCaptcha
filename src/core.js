@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import { obscurePuzzle, rotatePuzzleToPng } from './image-codec.js';
 import { validSignals } from './signals.js';
 import { assessChallengeBehavior } from './assessment.js';
+import { assessRequestContext } from './request-assessment.js';
 import { normalizeIp } from './ip.js';
 import { createMemoryStore } from './store.js';
 import { CaptchaError, invalid } from './error.js';
@@ -82,19 +83,26 @@ export function createCaptchaCore(options = {}, loadPictures) {
     });
   }
   async function throttle(ip) {
-    const retryAfterMs = await store.update(key('rate', ip), previous => {
-      const list = (previous ?? []).filter(t => now() - t < config.rateWindowMs);
-      const wait = list.length >= config.rateLimit ? Math.max(1, list[0] + config.rateWindowMs - now()) : 0;
-      if (!wait) list.push(now());
-      return { value: list, ttlMs: config.rateWindowMs, result: wait };
+    const time = now(), burstWindowMs = Math.min(10000, config.rateWindowMs);
+    const { retryAfterMs, frequency } = await store.update(key('rate', ip), previous => {
+      const list = (previous ?? []).filter(t => time - t < config.rateWindowMs);
+      const wait = list.length >= config.rateLimit ? Math.max(1, list[0] + config.rateWindowMs - time) : 0;
+      if (!wait) list.push(time);
+      return { value: list, ttlMs: config.rateWindowMs, result: { retryAfterMs: wait, frequency: {
+        count: list.length, burstCount: list.filter(t => time - t < burstWindowMs).length,
+        windowMs: config.rateWindowMs, burstWindowMs, limit: config.rateLimit,
+      } } };
     });
     if (retryAfterMs) throw new CaptchaError('RATE_LIMITED', '验证请求过于频繁，请稍后再试', 429, { retryAfterMs });
+    return frequency;
   }
-  async function mint(ctx, agentTicket) {
+  // 保留本轮最高风险报告；重置浏览器自报字段不能抹去此前观察到的风险。
+  const higherRisk = (previous, current) => previous && previous.risk.score > current.risk.score ? previous : current;
+  async function mint(ctx, agentTicket, requestAssessment) {
     if (config.enabled) await enforceIp(ctx);
     const agent = await agentLures.advance(ctx, agentTicket, config.tokenTtlMs);
     const token = crypto.randomBytes(32).toString('hex');
-    await store.set(key('token', token), { ...ctx, agentTicket, issuedAt: now(), expiresAt: now() + config.tokenTtlMs }, config.tokenTtlMs);
+    await store.set(key('token', token), { ...ctx, agentTicket, ...(requestAssessment ? { requestAssessment } : {}), issuedAt: now(), expiresAt: now() + config.tokenTtlMs }, config.tokenTtlMs);
     return { token, expiresInMs: config.tokenTtlMs, usableAfterMs: config.minTokenAgeMs, ...(agent ? { agent } : {}) };
   }
   async function release(ip, id) {
@@ -110,7 +118,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
     }
     return result;
   }
-  async function challenge(ctx, agentTicket) {
+  async function challenge(ctx, agentTicket, requestAssessment) {
     const id = crypto.randomBytes(16).toString('hex');
     const expiresAt = now() + config.challengeTtlMs;
     const reserved = await store.update(key('slots', ctx.ip), previous => {
@@ -123,7 +131,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
     try {
       const answer = crypto.randomInt(360);
       const image = rotatePuzzleToPng(obscurePuzzle(pictures[crypto.randomInt(pictures.length)]), answer);
-      await store.set(key('challenge', id), { ...ctx, agentTicket, answer, createdAt: now(), expiresAt, tries: config.challengeTries }, config.challengeTtlMs);
+      await store.set(key('challenge', id), { ...ctx, agentTicket, requestAssessment, answer, createdAt: now(), expiresAt, tries: config.challengeTries }, config.challengeTtlMs);
       const agent = await agentLures.advance(ctx, agentTicket, config.challengeTtlMs, id);
       return { challenge: { id, image: `data:image/png;base64,${image.toString('base64')}`, expiresInMs: config.challengeTtlMs, ...(agent ? { agent } : {}) } };
     } catch (err) { await store.delete(key('challenge', id)); await release(ctx.ip, id); throw err; }
@@ -134,15 +142,17 @@ export function createCaptchaCore(options = {}, loadPictures) {
       return checkIp(ctx.ip);
     },
     async createPow(input) {
-      const ctx = context(input); await throttle(ctx.ip);
+      const ctx = context(input), frequency = await throttle(ctx.ip);
       if (!config.enabled) return { prefix: '', bits: 0, expiresInMs: config.powTtlMs };
+      if (!validSignals(null, null, input.hints)) throw invalid('浏览器提示格式不正确');
+      const requestAssessment = assessRequestContext(input.hints, { requestHeaders: input.requestHeaders, frequency, nowMs: now() });
       const ipRisk = await enforceIp(ctx);
       const failures = await reputation(ctx.ip);
       const riskBits = ipRisk.listed === true ? 2 : ipRisk.risk === 'high' ? 4 : ipRisk.risk === 'medium' ? 2 : 0;
-      const bits = Math.min(28, config.powBits + riskBits + (failures >= 20 ? 4 : failures >= 8 ? 3 : failures >= 3 ? 2 : 0));
+      const bits = Math.min(28, config.powBits + riskBits + requestAssessment.risk.powBits + (failures >= 20 ? 4 : failures >= 8 ? 3 : failures >= 3 ? 2 : 0));
       const prefix = crypto.randomBytes(16).toString('hex');
       const agent = await agentLures.issue(ctx, prefix);
-      await store.set(key('pow', prefix), { ...ctx, bits, agentTicket: prefix }, config.powTtlMs);
+      await store.set(key('pow', prefix), { ...ctx, bits, requestAssessment, agentTicket: prefix }, config.powTtlMs);
       return { prefix, bits, expiresInMs: config.powTtlMs, agent };
     },
     async reportAgent(input) {
@@ -151,7 +161,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
       throw botDetected(record.source);
     },
     async verifyBehavior(input) {
-      const ctx = context(input); await throttle(ctx.ip);
+      const ctx = context(input), frequency = await throttle(ctx.ip);
       const agentDetected = hasAgentSignal(input);
       if (!config.enabled && !agentDetected) return mint(ctx);
       if (!config.enabled) { await reputation(ctx.ip, true); throw botDetected(); }
@@ -170,10 +180,11 @@ export function createCaptchaCore(options = {}, loadPictures) {
       if (!validSignals(trajectory, formBehavior, hints)) { await reputation(ctx.ip, true); throw invalid(); }
       await enforceIp(ctx);
       // 行为数据全部由客户端自报，不能单独作为签发凭据；normal 保留为兼容别名。
-      return challenge(ctx, accepted.agentTicket);
+      const requestAssessment = assessRequestContext(hints, { requestHeaders: input.requestHeaders, frequency, nowMs: now() });
+      return challenge(ctx, accepted.agentTicket, higherRisk(accepted.requestAssessment, requestAssessment));
     },
     async solveChallenge(input) {
-      const ctx = context(input); await throttle(ctx.ip);
+      const ctx = context(input), frequency = await throttle(ctx.ip);
       const agentDetected = hasAgentSignal(input);
       const { id, angle, pointer = 'mouse', trajectory = null, hints = null, keyboard = null } = input;
       if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id) || !Number.isFinite(angle) || Math.abs(angle) > 360000 || !['mouse', 'touch', 'pen', 'keyboard'].includes(pointer)) throw invalid();
@@ -186,8 +197,11 @@ export function createCaptchaCore(options = {}, loadPictures) {
         if (now() - record.createdAt < config.minSolveMs) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'TOO_FAST', retryAfterMs: config.minSolveMs - (now() - record.createdAt) } };
         const tolerance = config.tolerance;
         const elapsedMs = now() - record.createdAt;
-        const behaviorPasses = assessChallengeBehavior({ angle, pointer, trajectory, hints, keyboard }, { elapsedMs }).passed;
-        if (behaviorPasses && Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { success: true, releaseIp: record.ip, agentTicket: record.agentTicket } };
+        const assessment = assessChallengeBehavior({ angle, pointer, trajectory, hints, keyboard }, { elapsedMs, requestHeaders: input.requestHeaders, frequency, nowMs: now() });
+        const behaviorPasses = assessment.passed;
+        record.requestAssessment = higherRisk(record.requestAssessment, { risk: assessment.risk,
+          dimensions: Object.fromEntries(['browser', 'timezone', 'headers', 'frequency', 'language'].map(name => [name, assessment.dimensions[name]])) });
+        if (behaviorPasses && Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { success: true, releaseIp: record.ip, agentTicket: record.agentTicket, requestAssessment: record.requestAssessment } };
         record.tries--;
         const code = !record.tries ? 'CHALLENGE_EXHAUSTED' : behaviorPasses ? 'ANGLE_INCORRECT' : 'BEHAVIOR_REJECTED';
         return { value: record.tries ? record : undefined, ttlMs: record.expiresAt - now(), result: { code, triesRemaining: record.tries, releaseIp: record.tries ? undefined : record.ip } };
@@ -200,7 +214,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
         const message = { ANGLE_INCORRECT: '方向还未回正，请微调后重试', BEHAVIOR_REJECTED: '操作轨迹异常，请重新拖动完成验证', TOO_FAST: '请稍等再提交' }[result.code] ?? '挑战无效或已过期，请重新验证';
         throw new CaptchaError(result.code, message, 400, { triesRemaining: result.triesRemaining, retryAfterMs: result.retryAfterMs });
       }
-      return mint(ctx, result.agentTicket);
+      return mint(ctx, result.agentTicket, result.requestAssessment);
     },
     async cancelChallenge(input) {
       const ctx = context(input); await throttle(ctx.ip);

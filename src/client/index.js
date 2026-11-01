@@ -90,7 +90,7 @@ export function render(container, options = {}) {
     if (prepared && prepared.deadline > performance.now() + 1000) return Promise.resolve(prepared.pow);
     if (proofTask) return proofTask;
     const job = (async () => {
-      const proof = await request(`/pow?action=${encodeURIComponent(action)}`, undefined, signal);
+      const proof = await request(`/pow?action=${encodeURIComponent(action)}`, { hints: tracking.getHints() }, signal);
       if (signal.aborted) throw abortError();
       agentSignal.update(proof.agent);
       const deadline = performance.now() + proof.expiresInMs - proof.roundTripMs;

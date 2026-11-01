@@ -33,6 +33,24 @@ after(async () => { await mf?.dispose(); });
 const get = (path, ip = '192.0.2.1', headers = {}) => mf.dispatchFetch('https://captcha.example' + path, { headers: { 'CF-Connecting-IP': ip, ...headers } });
 const post = (path, body, ip = '192.0.2.1', headers = {}) => mf.dispatchFetch('https://captcha.example/captcha/v1' + path, { method: 'POST', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
 
+test('真实 Workers POST PoW 使用可信请求头和持久频率，环境报告跨 DO 重建保留', async () => {
+  const ip = '192.0.2.201';
+  const response = await post('/pow', { action: 'login', hints: { dpr: 1, sw: 1920, sh: 1080, vw: 1000, vh: 800, timeZone: 'UTC', tz: 0, lang: ['zh-CN'] },
+    requestHeaders: { 'user-agent': 'Mozilla/5.0', 'accept-language': 'zh' }, frequency: { count: 0 } }, ip, { 'User-Agent': 'curl/8', 'Accept-Language': 'de' });
+  assert.equal(response.status, 200);
+  const pow = await response.json(); assert.equal(pow.bits, 4); assert.equal(pow.requestAssessment, undefined);
+  await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
+  const db = await dbFor(ip);
+  const [row] = await db.exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:pow:' + pow.prefix);
+  const record = JSON.parse(row.value);
+  assert.equal(record.requestAssessment.dimensions.timezone.metrics.offsetConsistent, true);
+  assert.equal(record.requestAssessment.dimensions.frequency.metrics.count, 1);
+  assert.ok(record.requestAssessment.risk.signals.includes('LANGUAGE_MISMATCH'));
+  const next = await (await get('/captcha/v1/pow?action=login', ip)).json();
+  const [nextRow] = await db.exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:pow:' + next.prefix);
+  assert.equal(JSON.parse(nextRow.value).requestAssessment.dimensions.frequency.metrics.count, 2);
+});
+
 test('真实 Workers 无 Key 查询 Blackbox，提高 PoW 并持久缓存；查询接口仍需要后端密钥', async () => {
   const ip = '8.8.4.4';
   const pow = await (await get('/captcha/v1/pow?action=login', ip)).json();

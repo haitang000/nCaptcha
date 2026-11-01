@@ -88,8 +88,11 @@ export function createTracking(anchor, form) {
   }
   return {
     getHints() {
+      let timeZone;
+      try { timeZone = win.Intl?.DateTimeFormat().resolvedOptions().timeZone; } catch { /* 隐私设置可能禁用 Intl。 */ }
       return { dpr: Math.max(.5, Math.min(4, win.devicePixelRatio || 1)), sw: win.screen.width, sh: win.screen.height,
-        tz: new Date().getTimezoneOffset(), lang: [...(win.navigator.languages?.length ? win.navigator.languages : [win.navigator.language])].slice(0, 8), pointer, coarse };
+        vw: win.innerWidth, vh: win.innerHeight, ...(timeZone ? { timeZone } : {}),
+        tz: new (win.Date ?? Date)().getTimezoneOffset(), lang: [...(win.navigator.languages?.length ? win.navigator.languages : [win.navigator.language])].slice(0, 8), pointer, coarse };
     },
     getTrajectory() {
       if (coarse || pointer === 'touch' || pointer === 'pen') {

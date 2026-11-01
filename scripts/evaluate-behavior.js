@@ -10,11 +10,11 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const outputDir = path.resolve(root, args[1] ?? 'test-results/assessment');
 const samples = 100;
 const results = behaviorScenarios.map(({ input, ...scenario }) => {
-  const assess = () => assessChallengeBehavior(input, { elapsedMs: scenario.elapsedMs });
+  const assess = () => assessChallengeBehavior(input, { elapsedMs: scenario.elapsedMs, ...scenario.assessmentOptions });
   for (let i = 0; i < 20; i++) assess();
   const durations = Array.from({ length: samples }, () => { const start = performance.now(); assess(); return performance.now() - start; }).sort((a, b) => a - b);
   const assessment = assess();
-  return { ...scenario, assessment, matchesExpectation: assessment.passed === scenario.expectedPass,
+  return { ...scenario, assessment, matchesExpectation: assessment.passed === scenario.expectedPass && (!scenario.expectedRisk || assessment.risk.level === scenario.expectedRisk),
     latencyMs: { p50: durations[Math.ceil(samples * .5) - 1], p95: durations[Math.ceil(samples * .95) - 1] } };
 });
 const summarize = rows => ({ samples: rows.length, accepted: rows.filter(row => row.assessment.passed).length,
@@ -22,7 +22,7 @@ const summarize = rows => ({ samples: rows.length, accepted: rows.filter(row => 
 const dimensions = Object.fromEntries(Object.keys(results[0].assessment.dimensions).map(name => [name,
   Object.fromEntries(['pass', 'fail', 'info', 'unavailable'].map(status => [status, results.filter(row => row.assessment.dimensions[name].status === status).length]))]));
 const report = {
-  schemaVersion: 1, generatedAt: new Date().toISOString(),
+  schemaVersion: 2, generatedAt: new Date().toISOString(),
   scope: '合成样本的行为检查回归；不测量完整验证码攻破率，不代表真实用户误拒率或机器人检出率。',
   latencyScope: '本机纯行为评估函数耗时，每个样本预热 20 次后采样 100 次；不含 PoW、图片、网络和存储。',
   summary: summarize(results),
@@ -38,11 +38,11 @@ const lines = [
   '## 维度覆盖', '', '| 维度 | 通过 | 失败 | 仅观察 | 无数据 |', '| --- | ---: | ---: | ---: | ---: |',
   ...Object.entries(dimensions).map(([name, counts]) => `| ${name} | ${counts.pass} | ${counts.fail} | ${counts.info} | ${counts.unavailable} |`), '',
   '## 场景结果', '', report.latencyScope, '',
-  '| 场景 | 分组 | 预期 | 实际 | 匹配 | P95(ms) | 拒绝原因 |', '| --- | --- | --- | --- | --- | ---: | --- |',
-  ...results.map(row => `| ${row.name} | ${row.group} | ${row.expectedPass ? '通过' : '拒绝'} | ${row.assessment.passed ? '通过' : '拒绝'} | ${row.matchesExpectation ? '是' : '否'} | ${row.latencyMs.p95.toFixed(4)} | ${row.assessment.reasons.join(', ') || '—'} |`), '',
+  '| 场景 | 分组 | 预期 | 实际 | 匹配 | P95(ms) | 环境风险分 | 建议 PoW 增量 | 拒绝原因 |', '| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |',
+  ...results.map(row => `| ${row.name} | ${row.group} | ${row.expectedPass ? '通过' : '拒绝'} | ${row.assessment.passed ? '通过' : '拒绝'} | ${row.matchesExpectation ? '是' : '否'} | ${row.latencyMs.p95.toFixed(4)} | ${row.assessment.risk.score} | ${row.assessment.risk.powBits} | ${row.assessment.reasons.join(', ') || '—'} |`), '',
   '## 已知局限', '',
   ...results.filter(row => row.limitation).map(row => `- ${row.name}：${row.limitation}`), '',
-  '行为评估通过仍需满足服务端 PoW、图片答案、等待时间、限流和一次性令牌检查。环境差异、自动填充、停顿和重复节律仅作观察。', '',
+  '行为评估通过仍需满足服务端 PoW、图片答案、等待时间、限流和一次性令牌检查。请求环境风险在签发 PoW 时额外增加 0–2 位难度；报告分数不是机器人概率。自动填充、停顿和重复节律仅作观察。', '',
 ];
 await fs.mkdir(outputDir, { recursive: true });
 await fs.writeFile(path.join(outputDir, 'report.json'), JSON.stringify(report, null, 2) + '\n');

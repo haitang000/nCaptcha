@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { CaptchaError } from './error.js';
+import { pickRequestHeaders } from './request-assessment.js';
 
 export const clientAssets = new Set(['captcha.js', 'captcha.esm.js', 'captcha.css', 'pow-worker.js']);
 export function jsonResponse(status, data, headers = {}) {
@@ -66,11 +67,15 @@ export function createFetchHandler(captcha, { basePath = '/captcha/v1', assetPat
         return jsonResponse(200, { success: await captcha.consumeToken({ token: body.token, ip: body.ip, action: body.action }) }, headers);
       }
       const ip = getIp(request);
-      if (route === '/pow' && request.method === 'GET') return jsonResponse(200, await captcha.createPow({ ip, action: url.searchParams.get('action') ?? 'default' }), headers);
+      const requestHeaders = pickRequestHeaders(request.headers);
+      if (route === '/pow' && ['GET', 'POST'].includes(request.method)) {
+        const body = request.method === 'POST' ? await readRequestJson(request) : {};
+        return jsonResponse(200, await captcha.createPow({ ip, action: body.action ?? url.searchParams.get('action') ?? 'default', hints: body.hints, requestHeaders }), headers);
+      }
       const methods = { '/verify': 'verifyBehavior', '/challenge': 'solveChallenge', '/cancel': 'cancelChallenge', '/compat': 'reportAgent' };
       if (methods[route] && request.method === 'POST') {
         const body = await readRequestJson(request);
-        const value = await captcha[methods[route]]({ ...body, ip });
+        const value = await captcha[methods[route]]({ ...body, ip, requestHeaders });
         return jsonResponse(200, route === '/cancel' ? { cancelled: value } : value, headers);
       }
       throw new CaptchaError('NOT_FOUND', '验证码接口不存在或请求方法不正确', 404);

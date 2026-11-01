@@ -208,9 +208,12 @@ function plausibleHints(h) {
   if (!Number.isFinite(h.sw) || !Number.isFinite(h.sh)) return false;
   if (h.sw < 200 || h.sw > 10000 || h.sh < 100 || h.sh > 10000) return false;
   if (!Number.isFinite(h.tz) || h.tz < -14 * 60 || h.tz > 14 * 60) return false;
+  if ((h.vw === undefined) !== (h.vh === undefined)) return false;
+  if (h.vw !== undefined && (![h.vw, h.vh].every(value => Number.isFinite(value) && value >= 0 && value <= 100000))) return false;
+  if (h.timeZone !== undefined && (typeof h.timeZone !== 'string' || h.timeZone.length > 100 || !/^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$/.test(h.timeZone))) return false;
   if (!Array.isArray(h.lang) || h.lang.length < 1 || h.lang.length > 8) return false;
   for (const l of h.lang) {
-    if (typeof l !== 'string' || !/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(l)) return false;
+    if (typeof l !== 'string' || l.length > 100 || !/^(?:[A-Za-z]{2,8}|x)(-[A-Za-z0-9]{1,8})*$/.test(l)) return false;
   }
   return true;
 }

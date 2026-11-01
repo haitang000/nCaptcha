@@ -6,11 +6,12 @@ import { fixture, ctx, verify, keyboardForAngle } from './helpers.js';
 
 test('多维评测矩阵覆盖兼容性、异常和已知可伪造场景', async t => {
   for (const scenario of behaviorScenarios) await t.test(scenario.name, () => {
-    const result = assessChallengeBehavior(scenario.input, { elapsedMs: scenario.elapsedMs });
+    const result = assessChallengeBehavior(scenario.input, { elapsedMs: scenario.elapsedMs, ...scenario.assessmentOptions });
     assert.equal(result.passed, scenario.expectedPass, JSON.stringify(result));
     assert.deepEqual(JSON.parse(JSON.stringify(result)), result, '报告只能含有限数值');
-    assert.equal(Object.keys(result.dimensions).length, 8);
+    assert.equal(Object.keys(result.dimensions).length, 13);
     assert.equal(result.reasons.length === 0, result.passed);
+    if (scenario.expectedRisk) assert.equal(result.risk.level, scenario.expectedRisk);
   });
 });
 

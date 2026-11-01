@@ -30,16 +30,28 @@ export interface AgentSignal { agentSignal?: string }
 export interface Point { x: number; y: number; t: number }
 export interface KeyboardBehavior { startAngle: number; events: { key: 'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown' | 'PageUp' | 'PageDown' | 'Home' | 'End' | 'Enter'; control: 'range' | 'stage'; t: number }[] }
 export interface FormBehavior { totalMs: number; focusOrder: string[]; fields: Record<string, { n: number; meanGap: number; varGap: number }> }
-export interface Hints { dpr: number; sw: number; sh: number; tz: number; lang: string[]; pointer?: Pointer; coarse?: boolean }
-export type BehaviorDimension = 'integrity' | 'timing' | 'motion' | 'dynamics' | 'rhythm' | 'keyboard' | 'environment' | 'form';
+export interface Hints { dpr: number; sw: number; sh: number; tz: number; lang: string[]; vw?: number; vh?: number; timeZone?: string; pointer?: Pointer; coarse?: boolean }
+export type RequestDimension = 'browser' | 'timezone' | 'headers' | 'frequency' | 'language';
+export type BehaviorDimension = 'integrity' | 'timing' | 'motion' | 'dynamics' | 'rhythm' | 'keyboard' | 'environment' | 'form' | RequestDimension;
+export interface AssessmentDimension { status: 'pass' | 'fail' | 'info' | 'unavailable'; metrics: Record<string, number | boolean> }
+/** 服务端原子限流的窗口快照，包含当前请求；不能采用客户端自报值。 */
+export interface RequestFrequency { count: number; burstCount: number; windowMs: number; burstWindowMs: number; limit: number }
+/** 从实际请求中提取；HTTP 适配器忽略请求体伪造的 requestHeaders。 */
+export interface RequestMetadata { requestHeaders?: Record<string, string | undefined> }
+export interface RequestAssessmentOptions extends RequestMetadata { frequency?: RequestFrequency; nowMs?: number; pointer?: Pointer }
+export interface RequestRisk { score: number; level: 'unknown' | 'low' | 'medium' | 'high'; signals: string[]; powBits: number }
+export interface RequestAssessment { dimensions: Record<RequestDimension, AssessmentDimension>; risk: RequestRisk }
+/** 缺失信息保持中性；规则分不是机器人概率，建议 PoW 额外增加 0–2 位。 */
+export function assessRequestContext(hints?: Hints | null, options?: RequestAssessmentOptions): RequestAssessment;
 export interface BehaviorAssessment {
   /** 仅表示行为检查通过，不表示图片答案正确或真人概率。 */
   passed: boolean;
   reasons: string[];
-  dimensions: Record<BehaviorDimension, { status: 'pass' | 'fail' | 'info' | 'unavailable'; metrics: Record<string, number | boolean> }>;
+  dimensions: Record<BehaviorDimension, AssessmentDimension>;
+  risk: RequestRisk;
 }
 /** 离线省略 elapsedMs 时不检查服务端时间；线上求解始终传入真实已用时间。 */
-export function assessChallengeBehavior(input: { angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null; formBehavior?: FormBehavior | null }, options?: { elapsedMs?: number }): BehaviorAssessment;
+export function assessChallengeBehavior(input: { angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null; formBehavior?: FormBehavior | null }, options?: RequestAssessmentOptions & { elapsedMs?: number }): BehaviorAssessment;
 export type AgentSource = 'fastpass' | 'compat-event' | 'canary-token' | 'fallback-api';
 /** 每轮诱饵票据及假令牌；token 不能通过业务核验。 */
 export interface AgentLures { ticket: string; token: string; expiresInMs: number }
@@ -71,12 +83,12 @@ export interface CaptchaOptions {
 export interface CaptchaInstance {
   /** 仅供服务端查询；与验证流程共享缓存、限流和真实 IP 规范化。 */
   checkIpReputation(context: Context): Promise<IpReputation>;
-  createPow(context: Context): Promise<Pow>;
+  createPow(context: Context & RequestMetadata & { hints?: Hints | null }): Promise<Pow>;
   /** 命中诱饵时标记该轮次并以 BOT_DETECTED 拒绝；重复上报不重复计罚。 */
   reportAgent(input: Context & { ticket: string; source: AgentSource; token?: string }): Promise<never>;
-  verifyBehavior(input: Context & AgentSignal & { pow?: { prefix: string; nonce: string }; trajectory?: Point[] | null; formBehavior?: FormBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
+  verifyBehavior(input: Context & RequestMetadata & AgentSignal & { pow?: { prefix: string; nonce: string }; trajectory?: Point[] | null; formBehavior?: FormBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
   /** 指针操作需本轮轨迹；键盘操作还需可重放到提交角度的 keyboard 记录。 */
-  solveChallenge(input: Context & AgentSignal & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult>;
+  solveChallenge(input: Context & RequestMetadata & AgentSignal & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult>;
   cancelChallenge(input: Context & { id: string }): Promise<boolean>;
   consumeToken(input: Context & { token: string }): Promise<boolean>;
   setMode(mode: Mode): void;
