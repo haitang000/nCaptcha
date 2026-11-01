@@ -275,8 +275,12 @@ IPQS 的 `fraud_score` 为 0–100，越高风险越高：75–89 增加 2 位 P
 ## 🧪 常用开发命令
 
 ```powershell
-npm run build            # 构建客户端资源 (dist/)
+npm run build            # 构建 dist/ 资源，仅混淆验证相关模块
 npm test                 # 运行全部核心测试
 npm run test:assessment  # 运行多维行为动力学评测
 npm run test:browser     # 运行 Playwright 浏览器端到端测试
 ```
+
+客户端构建默认使用 [javascript-obfuscator](https://github.com/javascript-obfuscator/javascript-obfuscator) 仅对行为采集（`tracking.js`）、Agent 蜜罐（`agent-trap.js`）和 PoW 调度（`pow.js`、`pow-worker.js`）进行标识符混淆与 Base64 字符串数组编码，覆盖普通脚本、ESM 和 Worker；`build:workers` 与打包发布也自动执行。UI 入口（`index.js`）中的 DOM 渲染、文案、动画和交互流程，以及键盘操作（`keyboard.js`）、样式和 SVG 资源均不参与混淆，仅按原构建流程打包压缩。混淆只增加构建依赖，运行时仍为零依赖，不输出 source map。固定随机种子让相同源码和依赖版本生成相同产物。
+
+SHA-256 热循环保留常规压缩，避免字符串解码拖慢 PoW；混淆不启用 `eval`、反调试、控制流平坦化或自防御，保留 `Captcha.render`、ESM 导出及现有配置和回调。混淆用于提高客户端代码的阅读和分析成本，验证结果仍由服务端校验。
