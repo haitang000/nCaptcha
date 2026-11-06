@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import { CaptchaError, invalid } from './error.js';
+import { sameContext } from './intents.js';
 
 export const agentSources = ['fastpass', 'compat-event', 'canary-token', 'fallback-api'];
 export const botDetected = source => new CaptchaError('BOT_DETECTED', '已检测到自动化代理，验证被拒绝', 403, { bot: true, ...(source ? { source } : {}) });
 
 /** 票据与假令牌仅能标记所属轮次，绝不能作为授权凭据。 */
 export function createAgentLures({ store, key, now, powTtlMs, challengeTtlMs, tokenTtlMs, onDetect }) {
-  const same = (record, ctx) => record?.ip === ctx.ip && record.action === ctx.action;
+  const same = sameContext;
   function validate(record, ctx) {
     if (!record) throw new CaptchaError('AGENT_TICKET_INVALID', '验证票据无效或已过期');
     if (!same(record, ctx)) throw new CaptchaError('BINDING_MISMATCH', '验证票据绑定不匹配', 403);

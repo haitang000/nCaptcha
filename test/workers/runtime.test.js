@@ -17,7 +17,7 @@ before(async () => {
   mf = new Miniflare({ ...convertV4MiniflareOptions({ cf: false, port: 18879, workers: [{ name: 'captcha', modules: true, scriptPath: '.workers/test-bundle.js', compatibilityDate: '2026-10-01',
     durableObjects: { CAPTCHA_STATE: { className: 'CaptchaDurableObject', useSQLite: true } },
     assets: { directory: fileURLToPath(new URL('../../dist/', import.meta.url)), binding: 'ASSETS', run_worker_first: true, routerConfig: { has_user_worker: true } },
-    bindings: { CAPTCHA_SECRET: secret, CAPTCHA_ALLOWED_ORIGINS: 'https://business.example,http://127.0.0.1:18879', CAPTCHA_POW_BITS: '3', CAPTCHA_MIN_SOLVE_MS: '0', CAPTCHA_MIN_TOKEN_AGE_MS: '0' },
+    bindings: { CAPTCHA_SECRET: secret, CAPTCHA_ALLOWED_ORIGINS: 'https://business.example,http://127.0.0.1:18879', CAPTCHA_POW_BITS: '3', CAPTCHA_MIN_SOLVE_MS: '0', CAPTCHA_MIN_TOKEN_AGE_MS: '0', CAPTCHA_CHALLENGE_TRIES: '3', CAPTCHA_CHALLENGE_RATE_LIMIT: '10000' },
     outboundService: request => {
       const url = new URL(request.url);
       assert.equal(url.hostname, 'blackbox.ipinfo.app');
@@ -95,6 +95,41 @@ async function solve(ip, action = 'login') {
   assert.equal(response.status, 200, await response.clone().text());
   return response.json();
 }
+
+test('真实 Workers 意图贯穿 PoW、图片和 Token，DO 重建仍核对会话且拒绝重放', async () => {
+  const ip = '192.0.2.220', auth = { Authorization: `Bearer ${secret}` };
+  const binding = { ip, action: 'login', sessionId: 'worker-server-session', intentId: 'worker-server-operation' };
+  assert.equal((await post('/intent', binding, ip)).status, 401);
+  assert.equal((await post('/intent', binding, ip, { ...auth, Origin: 'https://business.example' })).status, 403);
+  const { intent } = await (await post('/intent', binding, ip, auth)).json();
+  const publicContext = { action: binding.action, intent };
+  const pow = await (await post('/pow', publicContext, ip)).json();
+  await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
+  const { challenge } = await (await post('/verify', { ...publicContext, pow: { prefix: pow.prefix, nonce: nonceFor(pow) } }, ip)).json();
+  const row = (await (await dbFor(ip)).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
+  const { token } = await (await post('/challenge', { ...publicContext, id: challenge.id, angle: -JSON.parse(row.value).answer, trajectory: challengeTrajectory }, ip)).json();
+  assert.ok(token);
+  await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
+  assert.deepEqual(await (await post('/siteverify', { ...binding, token, sessionId: 'wrong-session' }, ip, auth)).json(), { success: false });
+  assert.deepEqual(await (await post('/siteverify', { ...binding, token }, ip, auth)).json(), { success: true });
+  assert.deepEqual(await (await post('/siteverify', { ...binding, token }, ip, auth)).json(), { success: false });
+  assert.equal((await post('/pow', publicContext, ip)).status, 403);
+});
+
+test('Workers 强制意图时拒绝无凭据请求，强制私有模式时拒绝演示构建', async () => {
+  for (const [flag, expectedStatus, expectedCode] of [['CAPTCHA_REQUIRE_INTENT', 403, 'INTENT_REQUIRED'], ['CAPTCHA_REQUIRE_PRIVATE_IMAGES', 500, 'INTERNAL_ERROR']]) {
+    const hardened = new Miniflare(convertV4MiniflareOptions({ cf: false, workers: [{ name: 'hardened', modules: true, scriptPath: '.workers/test-bundle.js', compatibilityDate: '2026-10-01',
+      durableObjects: { CAPTCHA_STATE: { className: 'CaptchaDurableObject', useSQLite: true } },
+      assets: { directory: fileURLToPath(new URL('../../dist/', import.meta.url)), binding: 'ASSETS', run_worker_first: true, routerConfig: { has_user_worker: true } },
+      bindings: { CAPTCHA_SECRET: secret, CAPTCHA_IP_REPUTATION_PROVIDER: 'off', [flag]: 'true' },
+    }] }));
+    try {
+      const response = await hardened.dispatchFetch('https://captcha.example/captcha/v1/pow', { headers: { 'CF-Connecting-IP': '192.0.2.240' } });
+      assert.equal(response.status, expectedStatus);
+      const result = await response.json(); assert.equal(result.code, expectedCode); assert.equal(result.token, undefined); assert.equal(result.prefix, undefined);
+    } finally { await hardened.dispose(); }
+  }
+});
 
 test('真实 workerd 的 PoW 和图片挑战阶段均拒绝 agent 蜜罐并消费本轮凭证', async () => {
   const ip = '192.0.2.40';

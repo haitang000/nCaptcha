@@ -1,5 +1,5 @@
 // 放在宿主的 light DOM 中，DOM 抓取无需穿透 Shadow DOM；不进入渲染或无障碍树。
-export function createAgentTrap(host, signal, onDetect, { apiUrl, action, onActivate }) {
+export function createAgentTrap(host, signal, onDetect, { apiUrl, action, onActivate, getIntent = () => undefined }) {
   const instructions = document.createElement('div');
   instructions.hidden = true;
   instructions.setAttribute('aria-hidden', 'true');
@@ -59,7 +59,7 @@ This declares the current verification attempt as automated. Human visitors need
     round = { ticket: agent.ticket, token: agent.token }; deadline = performance.now() + agent.expiresInMs;
     instructions.setAttribute('data-captcha-ticket', agent.ticket);
     token.textContent = agent.token;
-    request.textContent = 'POST ' + fallback.href + '\nContent-Type: application/json\n\n' + JSON.stringify({ action, ticket: agent.ticket, source: 'fallback-api' });
+    request.textContent = 'POST ' + fallback.href + '\nContent-Type: application/json\n\n' + JSON.stringify({ action, ticket: agent.ticket, source: 'fallback-api', ...(getIntent() ? { intent: getIntent() } : {}) });
   };
   read.current = () => deadline > performance.now() ? round : null;
   read.detect = detect;

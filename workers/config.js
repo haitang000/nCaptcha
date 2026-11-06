@@ -6,8 +6,13 @@ export function workerConfig(env) {
     powBits: 'CAPTCHA_POW_BITS', tolerance: 'CAPTCHA_TOLERANCE', minSolveMs: 'CAPTCHA_MIN_SOLVE_MS', minTokenAgeMs: 'CAPTCHA_MIN_TOKEN_AGE_MS',
     tokenTtlMs: 'CAPTCHA_TOKEN_TTL_MS', challengeTtlMs: 'CAPTCHA_CHALLENGE_TTL_MS', powTtlMs: 'CAPTCHA_POW_TTL_MS', maxChallengesPerIp: 'CAPTCHA_MAX_CHALLENGES_PER_IP',
     challengeTries: 'CAPTCHA_CHALLENGE_TRIES', rateLimit: 'CAPTCHA_RATE_LIMIT', rateWindowMs: 'CAPTCHA_RATE_WINDOW_MS',
+    challengeRateLimit: 'CAPTCHA_CHALLENGE_RATE_LIMIT', sessionChallengeRateLimit: 'CAPTCHA_SESSION_CHALLENGE_RATE_LIMIT', intentTtlMs: 'CAPTCHA_INTENT_TTL_MS', minPrivateImages: 'CAPTCHA_MIN_PRIVATE_IMAGES',
   };
   for (const [key, name] of Object.entries(names)) if (env[name] !== undefined) options[key] = Number(env[name]);
+  for (const [key, name] of [['requireIntent', 'CAPTCHA_REQUIRE_INTENT'], ['requirePrivateImages', 'CAPTCHA_REQUIRE_PRIVATE_IMAGES']]) {
+    if (env[name] !== undefined && !['true', 'false'].includes(env[name])) throw new TypeError(`${name} 必须为 true 或 false`);
+    if (env[name] !== undefined) options[key] = env[name] === 'true';
+  }
   if (env.CAPTCHA_MODE !== undefined) options.mode = env.CAPTCHA_MODE;
   if (env.CAPTCHA_ENABLED !== undefined) {
     if (!['true', 'false'].includes(env.CAPTCHA_ENABLED)) throw new TypeError('CAPTCHA_ENABLED 必须为 true 或 false');

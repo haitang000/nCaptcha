@@ -1,6 +1,8 @@
 export type CaptchaState = 'idle' | 'loading' | 'verified' | 'error' | 'destroyed';
 export interface WidgetOptions {
   apiUrl?: string; assetBaseUrl?: string; workerUrl?: string; action?: string;
+  /** 后端签发的凭据；函数每次 reset 后重新调用，应从业务同源接口获取。 */
+  intent?: string | ((signal: AbortSignal) => string | Promise<string>);
   form?: string | HTMLFormElement; prewarm?: boolean; fetch?: typeof globalThis.fetch;
   /** 每次 API 请求及响应体读取的超时，默认 15000ms；须为正整数，最大 2147483647。 */
   requestTimeoutMs?: number;

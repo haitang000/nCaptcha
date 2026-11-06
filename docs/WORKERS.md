@@ -70,6 +70,20 @@ PoW、挑战、尝试次数、限流、失败声誉和令牌都保存在 SQLite 
 npm run build:workers -- --images-dir ./private-puzzles
 ```
 
+生产应使用强制私有检查，并在 Worker 的 vars 中设置 `CAPTCHA_REQUIRE_PRIVATE_IMAGES="true"`、`CAPTCHA_REQUIRE_INTENT="true"`：
+
+```text
+npm run build:workers -- --images-dir ./.private-puzzles --private
+```
+
+私有检查默认要求至少 32 张不同图片，拒绝原样内置题图和重复像素。若有明确需求，可同时设置构建参数 `--min-images <数量>` 和运行时 `CAPTCHA_MIN_PRIVATE_IMAGES`，两端要求都必须满足。私有图片由部署方提供，不应随开源仓库或 npm 分发。`npm run build:workers` 不带参数仍构建演示题库；开启运行时强制检查后，演示构建无法提供验证码，避免意外退回公开题库。Wrangler 部署时会重新执行 `build.command`，应把私有参数保存在部署配置中。
+
+`.workers/puzzles.js` 包含完整题图像素，私有构建产物只能用于部署；不要发布这类产物。标准 npm `prepack` 会重新构建内置演示题库，发布流程不要使用 `--ignore-scripts` 跳过它。私有目录或 CI 密钥需由自己的部署环境提供。
+
+业务后端通过 Bearer 密钥调用 `POST /captcha/v1/intent`，发送真实访客 `{ip, action, sessionId, intentId}`；浏览器将返回的 `intent` 传给组件的 `intent` 选项。后端消费时向 `/siteverify` 发送同一服务端会话和操作标识。两个受保护接口都按请求体中由可信业务后端提供的访客 IP 路由；公开接口继续只采用 Cloudflare 平台 IP。绑定流程、前端回调和错误码见主 README 的“生产加固与会话绑定”。
+
+同一会话在一个 IP 所属对象内有独立发题预算，换 action 或 intentId 不会重置。跨 IP 的会话/账号总预算应在业务后端实施，验证码通过后业务接口也继续限流。
+
 本地也支持绝对路径；云端 CI 应使用随源码提供的相对目录。无有效 PNG 时构建失败。`CAPTCHA_IMAGES_DIR` 仅适用于 Node 服务，Workers 不读取服务器目录。内置 10 张图片用于示例，均按明确的上下方向线索筛选，可换成自己的题库；来源与筛选标准见 [题图库说明](../assets/puzzles/README.md)。
 
 `wrangler.jsonc.vars` 支持主 README 对应的 `CAPTCHA_*` 字符串配置，包括模式、PoW 难度、TTL、角度容差和限流。`CAPTCHA_SECRET` 使用 secret 设置；修改配置后重新部署。Workers 版没有管理后台。

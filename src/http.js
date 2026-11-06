@@ -65,7 +65,7 @@ export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, a
       if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
       const route = url.pathname.slice(basePath.length);
       if (req.method === 'OPTIONS') {
-        if (!origin || !allowedOrigins.includes(origin) || ['/siteverify', '/reputation'].includes(route)) throw new CaptchaError('ORIGIN_DENIED', '该来源未获准访问', 403);
+        if (!origin || !allowedOrigins.includes(origin) || ['/siteverify', '/reputation', '/intent'].includes(route)) throw new CaptchaError('ORIGIN_DENIED', '该来源未获准访问', 403);
         const wantedHeaders = String(req.headers['access-control-request-headers'] ?? '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);
         if (wantedHeaders.some(h => h !== 'content-type') || !['GET', 'POST'].includes(req.headers['access-control-request-method'])) throw new CaptchaError('CORS_DENIED', '预检请求未获准', 403);
         res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '600' }); res.end(); return true;
@@ -75,22 +75,23 @@ export function createHttpHandler(captcha, { basePath = '/captcha/v1', secret, a
         res.writeHead(200, { 'Content-Type': asset.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=300', 'Cross-Origin-Resource-Policy': 'cross-origin' });
         res.end(req.method === 'HEAD' ? undefined : data); return true;
       }
-      if (route === '/siteverify' || route === '/reputation') {
+      if (['/siteverify', '/reputation', '/intent'].includes(route)) {
         // 验证端点不向浏览器开放；浏览器组件永远不需要后端密钥。
         if (origin || req.method !== 'POST') throw new CaptchaError('FORBIDDEN', '此接口仅用于服务端核验', 403);
         const provided = req.headers.authorization;
         const expected = `Bearer ${secret}`;
         if (!secret || typeof provided !== 'string' || Buffer.byteLength(provided) !== Buffer.byteLength(expected) || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) throw new CaptchaError('UNAUTHORIZED', '核验密钥不正确', 401);
         const body = await readJson(req);
+        if (route === '/intent') { sendJson(res, 200, await captcha.createIntent({ ip: body.ip, action: body.action, sessionId: body.sessionId, intentId: body.intentId })); return true; }
         if (route === '/reputation') { sendJson(res, 200, await captcha.checkIpReputation({ ip: body.ip })); return true; }
-        const success = await captcha.consumeToken({ token: body.token, ip: body.ip, action: body.action });
+        const success = await captcha.consumeToken({ token: body.token, ip: body.ip, action: body.action, sessionId: body.sessionId, intentId: body.intentId });
         sendJson(res, 200, { success }); return true;
       }
       const ip = getClientIp(req, trustedProxies, clientIpHeader);
       const requestHeaders = pickRequestHeaders(req.headers);
       if (route === '/pow' && ['GET', 'POST'].includes(req.method)) {
         const body = req.method === 'POST' ? await readJson(req) : {};
-        sendJson(res, 200, await captcha.createPow({ ip, action: body.action ?? url.searchParams.get('action') ?? 'default', hints: body.hints, requestHeaders })); return true;
+        sendJson(res, 200, await captcha.createPow({ ip, action: body.action ?? url.searchParams.get('action') ?? 'default', intent: body.intent, hints: body.hints, requestHeaders })); return true;
       }
       const methods = { '/verify': 'verifyBehavior', '/challenge': 'solveChallenge', '/cancel': 'cancelChallenge', '/compat': 'reportAgent' };
       if (methods[route] && req.method === 'POST') {

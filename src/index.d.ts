@@ -1,7 +1,9 @@
 /** normal 已弃用，作为 strict 的兼容别名；启用时始终要求图片挑战。 */
 export type Mode = 'normal' | 'strict';
 export type Pointer = 'mouse' | 'touch' | 'pen' | 'keyboard';
-export interface Context { ip: string; action?: string }
+export interface Context { ip: string; action?: string; /** 浏览器只能携带业务后端签发的凭据。 */ intent?: string }
+export interface IntentBinding { sessionId: string; intentId: string }
+export interface IntentResult { intent: string; expiresInMs: number }
 /** Blackbox 通过 listed 表示名单命中；只有 IPQS 提供数值风险分。 */
 export interface IpReputation {
   provider: 'blackbox' | 'ipqs' | 'off'; ip: string;
@@ -74,6 +76,12 @@ export interface CaptchaOptions {
   enabled?: boolean; mode?: Mode; powBits?: number; tolerance?: number;
   minSolveMs?: number; minTokenAgeMs?: number; tokenTtlMs?: number; challengeTtlMs?: number; powTtlMs?: number;
   maxChallengesPerIp?: number; challengeTries?: number; rateLimit?: number; rateWindowMs?: number;
+  /** 默认每题仅允许一次答案提交；发题预算覆盖失败、取消和跨 action 换题。 */
+  challengeRateLimit?: number; sessionChallengeRateLimit?: number;
+  /** requireIntent 默认 false 以兼容现有接入；生产应开启。 */
+  requireIntent?: boolean; intentTtlMs?: number;
+  /** 开启后拒绝内置题图及不足 minPrivateImages（默认 32）张独立图片的题库。 */
+  requirePrivateImages?: boolean; minPrivateImages?: number;
   imagesDir?: string; store?: CaptchaStore; namespace?: string; now?: () => number;
   ipqs?: IpqsOptions;
   /** 默认 blackbox；仅传 ipqs 配置时自动选 ipqs，off 关闭信誉查询。 */
@@ -81,6 +89,8 @@ export interface CaptchaOptions {
   blackbox?: BlackboxOptions;
 }
 export interface CaptchaInstance {
+  /** 仅供业务后端签发；sessionId 与 intentId 必须来自后端可信上下文。 */
+  createIntent(input: Context & IntentBinding): Promise<IntentResult>;
   /** 仅供服务端查询；与验证流程共享缓存、限流和真实 IP 规范化。 */
   checkIpReputation(context: Context): Promise<IpReputation>;
   createPow(context: Context & RequestMetadata & { hints?: Hints | null }): Promise<Pow>;
@@ -90,7 +100,7 @@ export interface CaptchaInstance {
   /** 指针操作需本轮轨迹；键盘操作还需可重放到提交角度的 keyboard 记录。 */
   solveChallenge(input: Context & RequestMetadata & AgentSignal & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult>;
   cancelChallenge(input: Context & { id: string }): Promise<boolean>;
-  consumeToken(input: Context & { token: string }): Promise<boolean>;
+  consumeToken(input: Context & Partial<IntentBinding> & { token: string }): Promise<boolean>;
   setMode(mode: Mode): void;
   close(): Promise<void>;
 }
@@ -98,4 +108,4 @@ export class CaptchaError extends Error { code: string; status: number; details:
 export function createCaptcha(options?: CaptchaOptions): CaptchaInstance;
 export function createMemoryStore(options?: { now?: () => number; maxEntries?: number; cleanupIntervalMs?: number }): CaptchaStore;
 export function angleDiff(a: number, b: number): number;
-export function validateContext(context: Context): Required<Context>;
+export function validateContext(context: Context): Required<Pick<Context, 'ip' | 'action'>>;

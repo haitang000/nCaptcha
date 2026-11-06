@@ -17,6 +17,24 @@
 
 ## 🚀 快速开始
 
+以下示例保留本地演示与旧接入兼容性。生产部署请先完成[生产加固与会话绑定](#生产加固与会话绑定)，提供独立私有题库并启用后端意图凭据。
+
+### 通过 npm 接入
+
+运行环境为 Node.js ≥ 22.5，包仅提供 ESM 导出：
+
+```powershell
+npm install @haitang000/ncaptcha
+```
+
+```javascript
+import { createCaptcha } from '@haitang000/ncaptcha';
+import { createExpressMiddleware } from '@haitang000/ncaptcha/http';
+import { render } from '@haitang000/ncaptcha/client';
+```
+
+后端与浏览器入口分别在对应环境中使用。npm 包已包含构建好的客户端文件、题图和 Workers 题库，安装后无需再次构建。Node.js 内嵌示例见下文；独立服务与 Workers 部署使用下面的源码方式。
+
 ### 方式 1：让 AI Agent 协助部署与接入（推荐）
 
 如果你正在使用 Cursor、Claude Code、Copilot 或 Antigravity 等 AI 编程助手，可直接复制以下提示词发送给 Agent，让其自动分析当前项目并完成端到端接入：
@@ -24,13 +42,13 @@
 > **📋 复制发给 AI Agent 的 Prompt：**
 >
 > ```markdown
-> 你是一名资深安全与全栈工程师。请帮我在当前项目中集成 nCaptcha 人机验证码。该项目尚未发布到 npm 公共仓库，请按以下步骤执行：
+> 你是一名资深安全与全栈工程师。请帮我在当前项目中集成 nCaptcha 人机验证码，请按以下步骤执行：
 >
 > 1. **获取源码与构建**：
->    - 在项目中克隆仓库：`git clone https://github.com/haitang000/nCaptcha.git`
->    - 进入目录并完成构建：`cd nCaptcha && npm ci && npm run build`（构建出前端所需的 `dist/` 资源）
+>    - Node.js 内嵌时优先安装 npm 包：`npm install @haitang000/ncaptcha`，包内已包含构建产物。
+>    - 若需要从源码接入、运行独立服务或部署 Workers，则在项目中克隆仓库：`git clone https://github.com/haitang000/nCaptcha.git`，再执行 `cd nCaptcha && npm ci && npm run build`。
 > 2. **接入方式选型**：
->    - **Node.js 内嵌模式**：在主项目中执行 `npm install ./nCaptcha` 本地安装依赖，使用 `createExpressMiddleware` 或原生 HTTP 中间件挂载 `/captcha` 路由与静态资源；
+>    - **Node.js 内嵌模式**：使用 npm 包；若采用源码方式，则在主项目中执行 `npm install ./nCaptcha` 本地安装依赖。使用 `createExpressMiddleware` 或原生 HTTP 中间件挂载 `/captcha` 路由与静态资源；
 >    - **独立微服务/边缘模式**：在 `nCaptcha` 目录下配置 `.env`（设置 `CAPTCHA_SECRET` 与前端来源白名单 `CAPTCHA_ALLOWED_ORIGINS`）并执行 `npm start` 启动独立服务，或执行 `npm run workers:deploy` 部署到 Cloudflare Workers。
 > 3. **前端挂载**：在目标业务表单（如登录、注册或高频接口）中引入组件并挂载到容器中；表单提交时调用 `const token = await captcha.verify()` 并在请求中携带 `captcha_token`，在 `finally` 块中调用 `captcha.reset()`。
 > 4. **后端核验**：在业务接口中提取真实客户端 IP，通过内部 `captcha.consumeToken({ token, ip, action })` 或向独立服务发起 `POST /captcha/v1/siteverify` 请求（携带 Bearer 密钥）核验并原子消费 Token。严格校验返回结果，未通过则阻断业务执行。
@@ -113,8 +131,8 @@ Content-Type: application/json
 #### Node.js 内嵌 (Express / 原生 HTTP)
 
 ```javascript
-import { createCaptcha } from 'portable-captcha';
-import { createExpressMiddleware, getClientIp } from 'portable-captcha/http';
+import { createCaptcha } from '@haitang000/ncaptcha';
+import { createExpressMiddleware, getClientIp } from '@haitang000/ncaptcha/http';
 
 const captcha = createCaptcha({ mode: 'strict' });
 
@@ -170,6 +188,7 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 | `POST /captcha/v1/cancel` | 公开 | 取消并释放题目 |
 | `POST /captcha/v1/compat` | 当前轮次票据 | 自动化兼容诱饵：标记所属轮次并返回 `BOT_DETECTED`，不提供绕过验证的能力 |
 | `POST /captcha/v1/siteverify` | **Bearer 密钥** | **后端核验并消费 Token** |
+| `POST /captcha/v1/intent` | **Bearer 密钥** | 由业务后端签发会话和具体操作绑定的验证凭据 |
 | `POST /captcha/v1/reputation` | **Bearer 密钥** | 查询指定访客 IP 的名单命中或风险报告 |
 | `GET /health` | 公开 | 服务健康检查 |
 
@@ -183,6 +202,66 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 | `minSolveMs` | `CAPTCHA_MIN_SOLVE_MS` | `1000` | 最短求解耗时 (ms)，防脚本瞬发 |
 | `tokenTtlMs` | `CAPTCHA_TOKEN_TTL_MS` | `300000` | 令牌有效期 (5 分钟) |
 | `rateLimit` | `CAPTCHA_RATE_LIMIT` | `60` / 10m | 单 IP 请求频次上限 |
+| `challengeTries` | `CAPTCHA_CHALLENGE_TRIES` | `1` | 每题答案提交次数；过早提交不会消耗次数 |
+| `challengeRateLimit` | `CAPTCHA_CHALLENGE_RATE_LIMIT` | `10` / 窗口 | 单 IP 发题预算，取消、答错和更换 action 均不退还 |
+| `sessionChallengeRateLimit` | `CAPTCHA_SESSION_CHALLENGE_RATE_LIMIT` | `5` / 窗口 | 已绑定会话的独立发题预算，更换操作 ID 不重置 |
+| `requireIntent` | `CAPTCHA_REQUIRE_INTENT` | `false` | 要求后端签发的业务意图凭据；Node 独立服务生产环境默认 true |
+| `intentTtlMs` | `CAPTCHA_INTENT_TTL_MS` | `600000` | 整个业务意图的最长有效期，不因重试延长 |
+| `requirePrivateImages` | `CAPTCHA_REQUIRE_PRIVATE_IMAGES` | `false` | 强制独立私有题库；Node 独立服务生产环境默认 true |
+| `minPrivateImages` | `CAPTCHA_MIN_PRIVATE_IMAGES` | `32` | 私有模式的最少不同图片数量，不是抗识别能力保证 |
+
+### 生产加固与会话绑定
+
+默认每题只允许一次答案提交，错误后组件重新获取题目并重新计算 PoW。发题预算与原有请求限流、同时占用题目数分别执行，窗口共用 `rateWindowMs`；成功、失败、取消和过期都不退还已计入的发题预算。绑定会话后还检查独立的会话预算。Node 多副本必须共享原子存储和 namespace；Workers 的预算在同一真实 IP 所属 Durable Object 内执行，跨 IP 的账号/会话总限额仍由业务后端统一控制。
+
+生产建议同时开启以下配置。Node 独立服务在 `NODE_ENV=production` 且未显式设置对应开关时默认开启；库内嵌和 Workers 为兼容旧接入，需要显式开启。旧客户端未提供意图时返回 `INTENT_REQUIRED`，不能通过自报 `sessionId`、`intentId` 或关闭开关降级。
+
+```dotenv
+CAPTCHA_REQUIRE_INTENT=true
+CAPTCHA_REQUIRE_PRIVATE_IMAGES=true
+CAPTCHA_IMAGES_DIR=./.private-puzzles
+CAPTCHA_MIN_PRIVATE_IMAGES=32
+```
+
+内嵌时传入 `createCaptcha({ requireIntent: true, requirePrivateImages: true, imagesDir: '/srv/private-puzzles' })`。题库需要至少 32 张不同的独立 PNG；内置题图即使改名、复制目录或改写 PNG 元数据也会被拒绝，重复像素不重复计数。此检查只能排除原样内置图片和完全重复图片，不能证明素材从未公开；独立图片及后续轮换由部署方提供。不要把私有题库放入公开资源、Git 或 npm 包；项目默认忽略 `.private-puzzles/`。Workers 私有题库构建见 [Workers 文档](docs/WORKERS.md)。
+
+业务后端先从当前服务器会话取得 `sessionId`，为实际操作生成并保存 `intentId`，再签发凭据；两者不能直接采用请求 JSON 的值。同一 IP 和有效期内，每个操作最多签发一个 Token。重复签发同一待完成操作会返回原凭据且不延长有效期；签发 Token 或消费后不允许该操作再次发题。Token 的有效期不会超过意图剩余期限。业务后端仍需检查操作状态与幂等性，防止已完成的业务在换 IP、意图过期或服务重启后被重新执行。
+
+```javascript
+// 业务同源接口内部执行，保留原有会话、CSRF、账号限流与操作检查。
+const binding = {
+  ip: getClientIp(req),
+  action: 'login',
+  sessionId: req.sessionID,
+  intentId: req.session.loginIntentId // 由后端生成、保存并关联当前登录操作
+};
+const { intent } = await captcha.createIntent(binding);
+res.json({ intent });
+
+// 业务登录接口内部重新从服务端会话和当前操作取得同一 binding。
+const ok = await captcha.consumeToken({ ...binding, token: req.body.captcha_token });
+if (!ok) return res.status(400).json({ error: '验证码无效或已过期' });
+// 执行业务操作；下一次操作由后端生成新的 intentId。
+```
+
+独立服务或 Workers 使用后端密钥调用 `POST /captcha/v1/intent`，请求为 `{ip, action, sessionId, intentId}`，响应为 `{intent, expiresInMs}`；业务提交时，后端向 `/siteverify` 发送 `{token, ip, action, sessionId, intentId}`。未匹配会话、操作或 IP 时核验失败，也不会消费另一个上下文的有效 Token。`/intent` 与 `/siteverify` 同样拒绝浏览器 Origin 请求，密钥只能由业务后端持有。验证码服务不会保存原始会话 ID 或操作 ID，只保存摘要。
+
+```javascript
+const captcha = Captcha.render('#captcha', {
+  apiUrl: '/captcha/v1', action: 'login', prewarm: false,
+  intent: async signal => {
+    // 此业务同源接口应验证会话、CSRF，并从后端保存的操作中签发凭据。
+    const response = await fetch('/api/login/captcha-intent', {
+      method: 'POST', credentials: 'same-origin', signal,
+      headers: { 'X-CSRF-Token': csrfToken }
+    });
+    if (!response.ok) throw new Error('无法开始验证');
+    return (await response.json()).intent;
+  }
+});
+```
+
+`intent` 也可直接传入后端返回的字符串。函数形式在 `reset()` 后重新调用，当前轮次换题复用同一凭据；获取过程有请求超时及取消保护。不要把固定字符串用于已经消费完成的下一次操作。新增发题限制触发 `CHALLENGE_RATE_LIMITED`（HTTP 429）；同一操作已签发 Token、已消费、凭据错误或过期时返回 `INTENT_INVALID`。
 
 ### 浏览器与请求环境评定
 
@@ -197,7 +276,7 @@ Node HTTP、Express 和 Web Fetch / Workers 适配器从实际请求提取 `User
 可通过导出的 `assessRequestContext(hints, options)` 单独评定，或通过 `assessChallengeBehavior(input, options)` 一并获取新增的 `browser`、`timezone`、`headers`、`frequency`、`language` 五个维度和 `risk`。`options` 可提供 `requestHeaders`、`frequency`、`nowMs`，便于离线重放；直接嵌入核心时，这些请求头应由业务服务端从真实请求提取。
 
 ```javascript
-import { assessRequestContext } from 'portable-captcha';
+import { assessRequestContext } from '@haitang000/ncaptcha';
 
 const report = assessRequestContext(
   { sw: 1920, sh: 1080, vw: 1200, vh: 800, dpr: 1, tz: 0, timeZone: 'UTC', lang: ['zh-CN'] },

@@ -16,8 +16,8 @@ const packed = JSON.parse(run(process.execPath, [npm, 'pack', '--json', '--ignor
 const info = Array.isArray(packed) ? packed[0] : Object.values(packed)[0];
 assert.ok(!info.files.some(file => /^(?:test|landing|examples)\//.test(file.path) || file.path === 'src/landing.js'));
 assert.deepEqual(info.files.filter(file => file.path.startsWith('dist/')).map(file => file.path).sort(), ['dist/captcha.css', 'dist/captcha.esm.js', 'dist/captcha.js', 'dist/pow-worker.js']);
-for (const name of ['src/index.js', 'src/index.d.ts', 'src/http.js', 'src/client/index.d.ts', 'dist/captcha.js', 'dist/captcha.esm.js', 'dist/captcha.css', 'dist/pow-worker.js', 'assets/puzzles/puzzle-1.png', 'workers/index.js', '.workers/puzzles.js', 'wrangler.jsonc', 'docs/WORKERS.md']) assert.ok(info.files.some(file => file.path === name), name);
-assert.ok(!info.files.some(file => file.path === '.dev.vars' || file.path === '.env' || file.path.startsWith('.wrangler/') || file.path.startsWith('.workers/bundle/')));
+for (const name of ['src/index.js', 'src/index.d.ts', 'src/http.js', 'src/client/index.d.ts', 'dist/captcha.js', 'dist/captcha.esm.js', 'dist/captcha.css', 'dist/pow-worker.js', 'assets/puzzles/puzzle-1.png', 'workers/index.js', '.workers/puzzles.js', 'docs/WORKERS.md']) assert.ok(info.files.some(file => file.path === name), name);
+assert.ok(!info.files.some(file => file.path === '.dev.vars' || file.path === '.env' || file.path === 'wrangler.jsonc' || file.path === 'docs/DEPLOYED.md' || file.path.startsWith('.deployment/') || file.path.startsWith('.wrangler/') || file.path.startsWith('.workers/bundle/')));
 await fs.mkdir(path.join(root, '.package-check'), { recursive: true });
 const directory = await fs.mkdtemp(path.join(root, '.package-check/run-'));
 await fs.writeFile(path.join(directory, 'package.json'), JSON.stringify({ name: 'captcha-integration-check', private: true, type: 'module' }));
@@ -26,8 +26,8 @@ await fs.writeFile(path.join(directory, 'verify.mjs'), `
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { createCaptcha, createMemoryStore, assessChallengeBehavior } from 'portable-captcha';
-import { createHttpHandler } from 'portable-captcha/http';
+import { createCaptcha, createMemoryStore, assessChallengeBehavior } from '@haitang000/ncaptcha';
+import { createHttpHandler } from '@haitang000/ncaptcha/http';
 const memory = createMemoryStore();
 let answer;
 const store = { ...memory, async set(key, value, ttl) { if (key.includes(':challenge:')) answer = value.answer; return memory.set(key, value, ttl); } };
@@ -51,6 +51,15 @@ try {
   const result = await c.solveChallenge({...ctx,id:checked.challenge.id,angle:-answer,trajectory:[{x:0,y:0,t:0},{x:20,y:0,t:40},{x:25,y:0,t:100}]});
   assert.equal(await c.consumeToken({...ctx,token:result.token}),true);
   assert.equal(await c.consumeToken({...ctx,token:result.token}),false);
+  const binding = {...ctx,sessionId:'package-server-session',intentId:'package-server-operation'};
+  const {intent} = await c.createIntent(binding);
+  const boundContext = {...ctx,intent};
+  const boundPow = await c.createPow(boundContext);
+  const boundChallenge = (await c.verifyBehavior({...boundContext,pow:{prefix:boundPow.prefix,nonce:'0'}})).challenge;
+  const boundResult = await c.solveChallenge({...boundContext,id:boundChallenge.id,angle:-answer,trajectory:[{x:0,y:0,t:0},{x:20,y:0,t:40},{x:25,y:0,t:100}]});
+  assert.equal(await c.consumeToken({...binding,sessionId:'another-session',token:boundResult.token}),false);
+  assert.equal(await c.consumeToken({...binding,token:boundResult.token}),true);
+  assert.equal(await c.consumeToken({...binding,token:boundResult.token}),false);
   console.log('安装后的包：库、题图、HTTP 静态资源及一次性业务消费均通过。');
 } finally { server.closeAllConnections(); await new Promise(r=>server.close(r)); await c.close(); await memory.close(); }
 `);

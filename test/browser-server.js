@@ -7,7 +7,7 @@ import { startBusinessServer } from './fixtures/business-server.js';
 const records = new Map();
 const memory = createMemoryStore();
 const store = { ...memory, async set(key, value, ttl) { if (key.includes(':challenge:')) records.set(key.split(':').at(-1), value); return memory.set(key, value, ttl); } };
-const captcha = createCaptcha({ store, powBits: 4, minSolveMs: 100, minTokenAgeMs: 150, tokenTtlMs: 3000, rateLimit: 10000 });
+const captcha = createCaptcha({ store, powBits: 4, minSolveMs: 100, minTokenAgeMs: 150, tokenTtlMs: 3000, rateLimit: 10000, challengeTries: 3, challengeRateLimit: 10000 });
 const secret = 'test-private-service-secret-123456789';
 const handler = createHttpHandler(captcha, { secret, allowedOrigins: ['http://127.0.0.1:18877', 'http://127.0.0.1:18878'], onError: console.error });
 const server = http.createServer(async (req, res) => {

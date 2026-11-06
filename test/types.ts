@@ -1,6 +1,6 @@
-import { createCaptcha, createMemoryStore, assessChallengeBehavior, assessRequestContext, type BehaviorAssessment, type CaptchaStore, type TokenResult, type RequestAssessment } from 'portable-captcha';
-import { createHttpHandler, createExpressMiddleware } from 'portable-captcha/http';
-import { render, type Widget } from 'portable-captcha/client';
+import { createCaptcha, createMemoryStore, assessChallengeBehavior, assessRequestContext, type BehaviorAssessment, type CaptchaStore, type TokenResult, type RequestAssessment } from '@haitang000/ncaptcha';
+import { createHttpHandler, createExpressMiddleware } from '@haitang000/ncaptcha/http';
+import { render, type Widget } from '@haitang000/ncaptcha/client';
 const store: CaptchaStore = createMemoryStore();
 const engine = createCaptcha({ store, mode: 'strict', powBits: 20 });
 const blackboxEngine = createCaptcha({ reputationProvider: 'blackbox', blackbox: { timeoutMs: 2500, cacheTtlMs: 3600000 } });
@@ -16,6 +16,13 @@ createHttpHandler(engine, { secret: 'x'.repeat(32), allowedOrigins: ['https://ex
 createExpressMiddleware(engine);
 const widget: Widget = render(document.body, { requestTimeoutMs: 15000, onSuccess(token) { token.toUpperCase(); }, onStateChange(state) { console.log(state); } });
 const context = { ip: '127.0.0.1', action: 'login' };
+const intentEngine = createCaptcha({ requireIntent: true, challengeRateLimit: 10, sessionChallengeRateLimit: 5, intentTtlMs: 600000, requirePrivateImages: true, minPrivateImages: 32, imagesDir: '/private/puzzles' });
+const intentBinding = { ...context, sessionId: 'server-session', intentId: 'server-operation' };
+const intentResult = await intentEngine.createIntent(intentBinding);
+await intentEngine.createPow({ ...context, intent: intentResult.intent });
+await intentEngine.consumeToken({ ...intentBinding, token: '0'.repeat(64) });
+render(document.body, { intent: async signal => { signal.throwIfAborted(); return intentResult.intent; } });
+await intentEngine.close();
 const assessment: BehaviorAssessment = assessChallengeBehavior({ angle: 0, pointer: 'keyboard', keyboard: { startAngle: 0, events: [{ key: 'Enter', control: 'range', t: 100 }] } }, { elapsedMs: 200 });
 const passed: boolean = assessment.passed;
 const metric: number | boolean = assessment.dimensions.keyboard.metrics.events;

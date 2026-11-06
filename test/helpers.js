@@ -15,7 +15,8 @@ export function fixture(options = {}) {
   const records = new Map();
   const memory = createMemoryStore({ now: () => time, cleanupIntervalMs: 0 });
   const store = { ...memory, async set(key, value, ttl) { records.set(key, structuredClone(value)); return memory.set(key, value, ttl); } };
-  const captcha = createCaptcha({ powBits: 3, minSolveMs: 0, minTokenAgeMs: 0, rateLimit: 1000, ...options, store, now: () => time });
+  // 原有行为用例显式保留多次重试；安全默认值由 hardening.test.js 单独验证。
+  const captcha = createCaptcha({ powBits: 3, minSolveMs: 0, minTokenAgeMs: 0, rateLimit: 1000, challengeTries: 3, challengeRateLimit: 1000, sessionChallengeRateLimit: 1000, ...options, store, now: () => time });
   return { captcha, store, records, advance(ms) { time += ms; }, answer(id) { return [...records].find(([key]) => key.endsWith(':challenge:' + id))?.[1].answer; }, async close() { await captcha.close(); await memory.close(); } };
 }
 export function nonceFor(pow, passes = true) {

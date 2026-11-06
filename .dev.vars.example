@@ -2,6 +2,12 @@
 CAPTCHA_SECRET="replace-with-your-own-random-secret-at-least-32-characters"
 # 默认 Blackbox v1，无需 API Key。
 CAPTCHA_IP_REPUTATION_PROVIDER="blackbox"
+CAPTCHA_CHALLENGE_TRIES="1"
+CAPTCHA_CHALLENGE_RATE_LIMIT="10"
+CAPTCHA_SESSION_CHALLENGE_RATE_LIMIT="5"
+# 生产启用以下两项，并先完成业务后端意图签发和 --private 题库构建。
+CAPTCHA_REQUIRE_INTENT="false"
+CAPTCHA_REQUIRE_PRIVATE_IMAGES="false"
 # CAPTCHA_BLACKBOX_TIMEOUT_MS="2500"
 # CAPTCHA_BLACKBOX_CACHE_TTL_MS="3600000"
 # 可选 IPQS：provider 改为 ipqs，云端使用 npx wrangler secret put IPQS_API_KEY。

@@ -3,7 +3,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodePng, resize } from './image-codec.js';
+import crypto from 'node:crypto';
 export { decodePng, encodePng, rotatePixels, rotateToPng, obscurePuzzle } from './image-codec.js';
+
+/** 对解码后像素去重，改文件名或 PNG 元数据不能把演示题图变为私有题图。 */
+export function validatePrivatePuzzles(pictures, bundled, minimum = 32) {
+  const fingerprint = pic => crypto.createHash('sha256').update(`${pic.w}:${pic.h}:`).update(pic.rgba).digest('hex');
+  const publicImages = new Set(bundled.map(fingerprint));
+  const unique = new Set();
+  for (const picture of pictures) {
+    const digest = fingerprint(picture);
+    if (publicImages.has(digest)) throw new Error('私有题库不能包含内置演示题图，请提供独立 PNG 题库');
+    unique.add(digest);
+  }
+  if (unique.size < minimum) throw new Error(`私有题库至少需要 ${minimum} 张不同的 PNG 题图，当前仅 ${unique.size} 张`);
+  return unique.size;
+}
 
 /** 读目录里所有 PNG 题图，解码 + 缩到 maxSize。哪张坏了跳过哪张，不拖垮启动。
  *  顺便记下内容区（非透明像素的包围盒）：发题时的随机裁剪只在内容里进行，

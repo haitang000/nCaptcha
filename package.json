@@ -1,9 +1,23 @@
 {
-  "name": "portable-captcha",
+  "name": "@haitang000/ncaptcha",
   "version": "0.2.0",
-  "private": true,
-  "description": "可自托管、零运行时依赖的行为分析、PoW 与图片回正验证码",
+  "description": "nCaptcha：可自托管、零运行时依赖的行为分析、PoW 与图片回正验证码",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haitang000/nCaptcha.git"
+  },
+  "homepage": "https://github.com/haitang000/nCaptcha#readme",
+  "bugs": {
+    "url": "https://github.com/haitang000/nCaptcha/issues"
+  },
+  "keywords": ["captcha", "ncaptcha", "proof-of-work", "self-hosted", "cloudflare-workers"],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
+  "types": "./src/index.d.ts",
   "engines": {
     "node": ">=22.5.0"
   },
@@ -36,10 +50,9 @@
     "dist",
     "workers",
     ".workers/puzzles.js",
-    "wrangler.jsonc",
     ".dev.vars.example",
     ".env.example",
-    "docs",
+    "docs/WORKERS.md",
     "README.md"
   ],
   "scripts": {

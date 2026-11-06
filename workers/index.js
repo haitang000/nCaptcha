@@ -6,11 +6,12 @@ import { createFetchHandler, jsonResponse } from '../src/fetch.js';
 import { createDurableStore } from './store.js';
 import { workerConfig } from './config.js';
 import { cloudflareClientIp } from '../src/ip.js';
-import puzzleData from '../.workers/puzzles.js';
+import puzzleData, { puzzleSource } from '../.workers/puzzles.js';
 
-const operations = ['createPow', 'verifyBehavior', 'solveChallenge', 'cancelChallenge', 'consumeToken', 'reportAgent', 'checkIpReputation'];
+const operations = ['createIntent', 'createPow', 'verifyBehavior', 'solveChallenge', 'cancelChallenge', 'consumeToken', 'reportAgent', 'checkIpReputation'];
 let pictures;
-function getPictures() {
+function getPictures(config) {
+  if (config.requirePrivateImages && (!puzzleSource.privatePool || puzzleSource.uniqueCount < config.minPrivateImages)) throw new Error('请使用 --private --images-dir 构建足量独立私有题图');
   return pictures ??= puzzleData.map(({ rgba, ...image }) => ({ ...image, rgba: Buffer.from(rgba, 'base64') }));
 }
 export class CaptchaDurableObject extends DurableObject {

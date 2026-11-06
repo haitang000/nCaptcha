@@ -16,6 +16,8 @@ export function render(container, options = {}) {
   const assets = new URL(options.assetBaseUrl ?? defaultAssets, document.baseURI).href.replace(/\/?$/, '/');
   const action = options.action ?? 'default';
   if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(action)) throw new TypeError('action 格式不正确');
+  const validIntent = value => typeof value === 'string' && /^[a-f0-9]{64}\.[a-f0-9]{64}$/.test(value);
+  if (options.intent !== undefined && typeof options.intent !== 'function' && !validIntent(options.intent)) throw new TypeError('intent 必须为后端签发的验证凭据或获取凭据的函数');
   const requestTimeoutMs = options.requestTimeoutMs ?? 15000;
   if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > 2147483647) throw new TypeError('requestTimeoutMs 必须为 1–2147483647 的整数');
   const form = typeof options.form === 'string' ? document.querySelector(options.form) : options.form;
@@ -30,12 +32,13 @@ export function render(container, options = {}) {
   const tracking = createTracking(button, form);
   const lifetime = new AbortController();
   let controller = new AbortController(), task = null, prepared = null, proofTask = null, reportTask = null, token = null, expiresAt = 0, expiryTimer = null, dialog = null, cancelPuzzle = null, challengeId = null, destroyed = false;
+  let activeIntent;
   const notify = (name, ...args) => { try { options[name]?.(...args); } catch (err) { console.error('[captcha] 回调异常', err); } };
   const motion = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
   const agentSignal = createAgentTrap(host, lifetime.signal, () => {
     clearTimeout(expiryTimer); expiryTimer = null; token = null; expiresAt = 0;
     state('error', '已标记为机器人', '已检测到自动化代理，验证被拒绝');
-  }, { apiUrl, action, onActivate: activateAgent });
+  }, { apiUrl, action, onActivate: activateAgent, getIntent: () => activeIntent });
   function state(value, text, error = '') {
     if (destroyed) return;
     const from = button.getBoundingClientRect().width;
@@ -65,7 +68,7 @@ export function render(container, options = {}) {
       const pending = (async () => {
         const agent = body !== undefined && ['/verify', '/challenge'].includes(path) ? agentSignal() : '';
         const response = await (options.fetch ?? fetch)(apiUrl + path, { method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', signal: transport.signal,
-          headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify({ ...body, ...(agent ? { agentSignal: agent } : {}), action }) });
+          headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify({ ...body, ...(agent ? { agentSignal: agent } : {}), ...(activeIntent ? { intent: activeIntent } : {}), action }) });
         const data = await response.json();
         if (!response.ok) {
           if (!transport.signal.aborted && data.code === 'BOT_DETECTED') agentSignal.detect(data.source ?? 'automated-agent');
@@ -90,6 +93,23 @@ export function render(container, options = {}) {
     if (prepared && prepared.deadline > performance.now() + 1000) return Promise.resolve(prepared.pow);
     if (proofTask) return proofTask;
     const job = (async () => {
+      if (options.intent !== undefined && !activeIntent) {
+        const transport = new AbortController();
+        let timer, aborted;
+        const interrupted = new Promise((_, reject) => {
+          const stop = error => { reject(error); transport.abort(); };
+          aborted = () => stop(abortError());
+          signal.addEventListener('abort', aborted, { once: true });
+          timer = setTimeout(() => stop(new CaptchaClientError('获取业务验证凭据超时，请重试', 'REQUEST_TIMEOUT')), requestTimeoutMs);
+          if (signal.aborted) aborted();
+        });
+        try {
+          const intent = await Promise.race([interrupted, Promise.resolve().then(() => typeof options.intent === 'function' ? options.intent(transport.signal) : options.intent)]);
+          if (signal.aborted) throw abortError();
+          if (!validIntent(intent)) throw new CaptchaClientError('业务后端返回了不正确的验证凭据', 'INTENT_INVALID');
+          activeIntent = intent;
+        } finally { clearTimeout(timer); signal.removeEventListener('abort', aborted); }
+      }
       const proof = await request(`/pow?action=${encodeURIComponent(action)}`, { hints: tracking.getHints() }, signal);
       if (signal.aborted) throw abortError();
       agentSignal.update(proof.agent);
@@ -312,6 +332,7 @@ export function render(container, options = {}) {
     if (destroyed) return;
     controller.abort(); cancelPuzzle?.(); controller = new AbortController();
     clearTimeout(expiryTimer); expiryTimer = null; token = null; expiresAt = 0; prepared = null; proofTask = null; reportTask = null; task = null;
+    activeIntent = undefined;
     agentSignal.clear();
     if (agentSignal()) state('error', '已标记为机器人', '已检测到自动化代理，验证被拒绝');
     else state('idle', '我不是机器人');
@@ -339,6 +360,7 @@ export function render(container, options = {}) {
         expiryTimer = setTimeout(() => { reset(); notify('onExpire'); }, Math.max(1, until - performance.now()));
         state('verified', '验证通过'); notify('onSuccess', result.token); return result.token;
       } catch (error) {
+        if (!signal.aborted && ['INTENT_INVALID', 'INTENT_REQUIRED'].includes(error.code)) { activeIntent = undefined; prepared = null; }
         if (!signal.aborted) { state('error', '验证失败，点击重试', error.message); notify('onError', error); }
         throw error;
       }

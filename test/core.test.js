@@ -21,7 +21,8 @@ test('PoW 正确、错误、重放、过期及 IP/用途绑定', async t => {
       if (kind === 'ip') input.ip = '127.0.0.2';
       if (kind === 'action') input.action = 'register';
       await assert.rejects(f.captcha.verifyBehavior(input), code('POW_INVALID'));
-      await assert.rejects(f.captcha.verifyBehavior({ ...ctx, pow: input.pow }), code('POW_INVALID'));
+      if (kind === 'ip' || kind === 'action') assert.ok((await f.captcha.verifyBehavior({ ...ctx, pow: input.pow })).challenge);
+      else await assert.rejects(f.captcha.verifyBehavior({ ...ctx, pow: input.pow }), code('POW_INVALID'));
     } finally { await f.close(); }
   });
 });

@@ -17,6 +17,9 @@ export interface WorkerEnv {
   CAPTCHA_TOKEN_TTL_MS?: string; CAPTCHA_CHALLENGE_TTL_MS?: string; CAPTCHA_POW_TTL_MS?: string;
   CAPTCHA_MAX_CHALLENGES_PER_IP?: string; CAPTCHA_CHALLENGE_TRIES?: string;
   CAPTCHA_RATE_LIMIT?: string; CAPTCHA_RATE_WINDOW_MS?: string;
+  CAPTCHA_CHALLENGE_RATE_LIMIT?: string; CAPTCHA_SESSION_CHALLENGE_RATE_LIMIT?: string;
+  CAPTCHA_REQUIRE_INTENT?: 'true' | 'false'; CAPTCHA_INTENT_TTL_MS?: string;
+  CAPTCHA_REQUIRE_PRIVATE_IMAGES?: 'true' | 'false'; CAPTCHA_MIN_PRIVATE_IMAGES?: string;
 }
 export class CaptchaDurableObject extends DurableObject<WorkerEnv> {
   execute(operation: string, input: Record<string, unknown>): Promise<{ ok: true; value: unknown } | { ok: false; error: { code: string; message: string; status: number; details: Record<string, unknown> } }>;
