@@ -79,17 +79,46 @@ test('真实像素旋转为顺时针，客户端需用负角度回正', () => {
   const original = rotatePixels(rotated, -90);
   assert.equal(original.rgba[(1 * 8 + 4) * 4], 255);
 });
-test('圆形出题与完整旋转后遮罩一致，兼容奇偶尺寸、矩形和跨零角度', () => {
+test('圆形出题保留内部像素并清除外圈，兼容奇偶尺寸、矩形和跨零角度', () => {
   for (const [w, h] of [[1, 1], [5, 5], [8, 5], [17, 32], [64, 64]]) {
     const rgba = Buffer.from(Array.from({ length: w * h * 4 }, (_, i) => (i * 37 + 91) % 256));
     const pic = { w, h, rgba };
     for (const angle of [-23.5, 0, 90, 137, 359]) {
-      const expected = rotatePixels(pic, angle), center = expected.w / 2, radius = Math.max(0, center - 2);
-      for (let y = 0; y < expected.h; y++) for (let x = 0; x < expected.w; x++) {
-        if ((x - center) ** 2 + (y - center) ** 2 > radius ** 2) expected.rgba.fill(0, (y * expected.w + x) * 4, (y * expected.w + x) * 4 + 4);
+      const full = rotatePixels(pic, angle), image = decodePng(rotatePuzzleToPng(pic, angle));
+      assert.equal(image.w, full.w); assert.equal(image.h, full.h);
+      const center = image.w / 2, radius = Math.max(0, center - 2);
+      for (let y = 0; y < image.h; y++) for (let x = 0; x < image.w; x++) {
+        const offset = (y * image.w + x) * 4;
+        const pixel = image.rgba.subarray(offset, offset + 4), original = full.rgba.subarray(offset, offset + 4);
+        const distance = Math.hypot(x - center, y - center);
+        if (distance >= radius || pixel[3] === 0) assert.deepEqual([...pixel], [0, 0, 0, 0]);
+        else {
+          assert.deepEqual(pixel.subarray(0, 3), original.subarray(0, 3), '抗锯齿只改变透明度，不改变颜色');
+          assert.ok(pixel[3] <= original[3]);
+          if (distance <= radius - 1) assert.deepEqual(pixel, original, '圆内像素应保持清晰');
+        }
       }
-      assert.deepEqual(rotatePuzzleToPng(pic, angle), encodePng(expected));
     }
+  }
+});
+
+test('圆周具有半透明抗锯齿且不产生黑边，透明素材的边缘不会变得更不透明', () => {
+  const size = 256, color = [225, 170, 85];
+  for (const opacity of [128, 255]) {
+    const rgba = Buffer.alloc(size * size * 4);
+    for (let i = 0; i < rgba.length; i += 4) rgba.set([...color, opacity], i);
+    const image = decodePng(rotatePuzzleToPng({ w: size, h: size, rgba }, 31));
+    let softened = 0;
+    for (let i = 0; i < image.rgba.length; i += 4) {
+      const alpha = image.rgba[i + 3];
+      assert.ok(alpha <= opacity);
+      if (alpha > 0) assert.deepEqual([...image.rgba.subarray(i, i + 3)], color);
+      if (alpha > 0 && alpha < opacity) softened++;
+    }
+    assert.ok(softened > 500, '圆周各处应存在半透明像素，不能只有全透明和全不透明的硬边');
+    assert.equal(image.rgba[(128 * size + 128) * 4 + 3], opacity);
+    assert.equal(image.rgba[(128 * size + 253) * 4 + 3], opacity);
+    assert.equal(image.rgba[(128 * size + 254) * 4 + 3], 0);
   }
 });
 

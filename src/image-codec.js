@@ -173,7 +173,9 @@ function rotateImage(pic, deg, circleOnly) {
   const cx = pic.w / 2;
   const cy = pic.h / 2;
   const c2 = size / 2;
-  const radiusSquared = Math.max(0, c2 - 2) ** 2;
+  const radius = Math.max(0, c2 - 2);
+  const radiusSquared = radius ** 2;
+  const solidRadiusSquared = Math.max(0, radius - 1) ** 2;
   for (let y = 0; y < size; y++) {
     const dy = y - c2;
     const dySquared = dy * dy;
@@ -185,7 +187,11 @@ function rotateImage(pic, deg, circleOnly) {
     for (let x = start; x <= end; x++) {
       const dx = x - c2;
       // 输出缓冲区初始全零：外圈不采样，也不会带出隐藏的 RGB 数据。
-      if (circleOnly && dx * dx + dySquared > radiusSquared) continue;
+      const distanceSquared = dx * dx + dySquared;
+      if (circleOnly && distanceSquared >= radiusSquared) continue;
+      // 仅在圆周内侧一像素做透明度过渡，避免硬裁切在缩放、旋转后出现锯齿。
+      const coverage = circleOnly && distanceSquared > solidRadiusSquared
+        ? radius - Math.sqrt(distanceSquared) : 1;
       const sx = cx + dx * cos + dy * sin;
       const sy = cy - dx * sin + dy * cos;
       if (sx < 0 || sy < 0 || sx > pic.w - 1 || sy > pic.h - 1) continue;
@@ -208,6 +214,10 @@ function rotateImage(pic, deg, circleOnly) {
             pic.rgba[o10 + c] * left * fy +
             pic.rgba[o11 + c] * fx * fy
         );
+      }
+      if (circleOnly) {
+        out[di + 3] = Math.round(out[di + 3] * coverage);
+        if (out[di + 3] === 0) out.fill(0, di, di + 4);
       }
     }
   }
