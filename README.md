@@ -55,7 +55,39 @@ import { render } from '@haitang000/ncaptcha/client';
 > 5. **联调验证**：端到端提交一次表单，确认人机交互正常且 Token 仅能单次消费、不可重放。
 > ```
 
-### 方式 2：手动运行独立微服务（Node.js ≥ 22.5）
+### 方式 2：Linux Docker 自动安装独立服务
+
+在已安装并启动 Docker 的 Linux 服务器上，下载并运行安装脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/haitang000/nCaptcha/main/scripts/install.sh -o /tmp/ncaptcha-install.sh
+sudo bash /tmp/ncaptcha-install.sh
+```
+
+脚本使用 Docker 从 GitHub 的 `main` 分支克隆代码到 `/opt/ncaptcha`，构建客户端，并生成权限为 `600` 的 `/opt/ncaptcha.env`。服务以 `ncaptcha` 容器运行，只监听 `127.0.0.1:8787`，并设置自动重启。它不会覆盖已有的同名目录、配置文件或容器；失败时保留已创建的内容，方便检查。查看日志可运行 `docker logs ncaptcha`。
+
+可以在安装时指定业务页面的精确来源，例如：
+
+```bash
+sudo CAPTCHA_ALLOWED_ORIGINS='https://example.com,https://www.example.com' bash /tmp/ncaptcha-install.sh
+```
+
+也可以安装后编辑 `/opt/ncaptcha.env`。没有配置来源时，带 `Origin` 的浏览器请求会被拒绝。通过宝塔或其他反向代理对外提供服务时，配置 HTTPS 并将请求转发到 `http://127.0.0.1:8787`。如果代理与服务在同一台机器上，设置 `CAPTCHA_TRUSTED_PROXIES=127.0.0.1,::1`，并让直接相邻的代理使用真实客户端地址覆盖 `X-Forwarded-For`；不要直接信任客户端传入的转发头。
+
+修改配置后需重建容器以加载新的环境变量（会短暂中断服务）：
+
+```bash
+docker rm -f ncaptcha
+docker run -d --name ncaptcha --restart unless-stopped --network host \
+  --env-file /opt/ncaptcha.env -v /opt/ncaptcha:/app:ro -w /app \
+  node:22-bookworm-slim node src/server.js
+docker logs ncaptcha
+curl -fsS http://127.0.0.1:8787/health
+```
+
+此安装默认使用内置题图、兼容模式下的业务意图配置和单进程内存存储，适合初始部署与联调。正式使用前，按[生产加固与会话绑定](#生产加固与会话绑定)准备私有题库、启用意图凭据，并将题库目录以只读卷挂载到容器；密钥仅供业务后端使用。该脚本不自动更新已有部署。
+
+### 方式 3：手动运行独立微服务（Node.js ≥ 22.5）
 
 ```powershell
 npm ci
@@ -64,7 +96,7 @@ Copy-Item .env.example .env   # 填入 CAPTCHA_SECRET 与 CAPTCHA_ALLOWED_ORIGIN
 npm start                     # 启动服务，默认监听 http://127.0.0.1:8787
 ```
 
-### 方式 3：手动部署到 Cloudflare Workers
+### 方式 4：手动部署到 Cloudflare Workers
 
 ```powershell
 npx wrangler secret put CAPTCHA_SECRET
