@@ -216,7 +216,7 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 | :--- | :--- | :--- |
 | `POST /captcha/v1/pow` | 公开 | 携带 `action`、`hints` 获取自适应 PoW；兼容原有 `GET /pow?action=...` |
 | `POST /captcha/v1/verify` | 公开 | 提交 PoW，换取图片挑战 |
-| `POST /captcha/v1/challenge` | 公开 | 提交回正角度与交互轨迹 |
+| `POST /captcha/v1/challenge` | 公开 | 提交回正角度与交互轨迹，通过后返回下一题或令牌 |
 | `POST /captcha/v1/cancel` | 公开 | 取消并释放题目 |
 | `POST /captcha/v1/compat` | 当前轮次票据 | 自动化兼容诱饵：标记所属轮次并返回 `BOT_DETECTED`，不提供绕过验证的能力 |
 | `POST /captcha/v1/siteverify` | **Bearer 密钥** | **后端核验并消费 Token** |
@@ -235,8 +235,9 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 | `tokenTtlMs` | `CAPTCHA_TOKEN_TTL_MS` | `300000` | 令牌有效期 (5 分钟) |
 | `rateLimit` | `CAPTCHA_RATE_LIMIT` | `60` / 10m | 单 IP 请求频次上限 |
 | `challengeTries` | `CAPTCHA_CHALLENGE_TRIES` | `1` | 每题答案提交次数；过早提交不会消耗次数 |
-| `challengeRateLimit` | `CAPTCHA_CHALLENGE_RATE_LIMIT` | `10` / 窗口 | 单 IP 发题预算，取消、答错和更换 action 均不退还 |
-| `sessionChallengeRateLimit` | `CAPTCHA_SESSION_CHALLENGE_RATE_LIMIT` | `5` / 窗口 | 已绑定会话的独立发题预算，更换操作 ID 不重置 |
+| `challengeRounds` | `CAPTCHA_CHALLENGE_ROUNDS` | `2` | 签发令牌所需连续通过的题数，可设为 1–5 |
+| `challengeRateLimit` | `CAPTCHA_CHALLENGE_RATE_LIMIT` | `10` / 窗口 | 单 IP 开始新一组题的预算 |
+| `sessionChallengeRateLimit` | `CAPTCHA_SESSION_CHALLENGE_RATE_LIMIT` | `5` / 窗口 | 已绑定会话开始新一组题的预算，更换操作 ID 不重置 |
 | `requireIntent` | `CAPTCHA_REQUIRE_INTENT` | `false` | 要求后端签发的业务意图凭据；Node 独立服务生产环境默认 true |
 | `intentTtlMs` | `CAPTCHA_INTENT_TTL_MS` | `600000` | 整个业务意图的最长有效期，不因重试延长 |
 | `requirePrivateImages` | `CAPTCHA_REQUIRE_PRIVATE_IMAGES` | `false` | 强制独立私有题库；Node 独立服务生产环境默认 true |
@@ -244,7 +245,9 @@ A/B 会自动报告当前票据；C 在业务后端调用 `consumeToken` 或 `/s
 
 ### 生产加固与会话绑定
 
-默认每题只允许一次答案提交，错误后组件重新获取题目并重新计算 PoW。发题预算与原有请求限流、同时占用题目数分别执行，窗口共用 `rateWindowMs`；成功、失败、取消和过期都不退还已计入的发题预算。绑定会话后还检查独立的会话预算。Node 多副本必须共享原子存储和 namespace；Workers 的预算在同一真实 IP 所属 Durable Object 内执行，跨 IP 的账号/会话总限额仍由业务后端统一控制。
+默认连续回正两张图片后才签发令牌。每张独立随机旋转，一组题共用第一张题的截止时间。默认每题允许提交一次，失败后组件重新计算 PoW 并从第一题开始。每组新题扣一次发题预算，通过后续题目的过程仍受请求限流和同时占用题目数限制。发题预算共用 `rateWindowMs`，结束或取消均不退还。Node 多副本必须共享原子存储和 namespace。Workers 的会话预算在同一真实 IP 所属 Durable Object 内执行，跨 IP 的账号或会话总限额由业务后端统一控制。
+
+升级时同步更新服务端和浏览器组件。自定义客户端应处理 `POST /challenge` 或 `solveChallenge()` 返回的 `{ challenge }`，继续展示下一张图片，收到 `{ token, ... }` 后再提交业务操作。启用两题时，升级前已签发且尚未消费的单题令牌会失效。
 
 生产建议同时开启以下配置。Node 独立服务在 `NODE_ENV=production` 且未显式设置对应开关时默认开启；库内嵌和 Workers 为兼容旧接入，需要显式开启。旧客户端未提供意图时返回 `INTENT_REQUIRED`，不能通过自报 `sessionId`、`intentId` 或关闭开关降级。
 

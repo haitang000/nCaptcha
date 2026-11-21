@@ -15,7 +15,7 @@ export { createMemoryStore, CaptchaError };
 const defaults = Object.freeze({
   enabled: true, mode: 'strict', powBits: 20, tolerance: 10, minSolveMs: 1000,
   minTokenAgeMs: 300, tokenTtlMs: 300000, challengeTtlMs: 300000, powTtlMs: 120000,
-  maxChallengesPerIp: 3, challengeTries: 1, rateLimit: 60, rateWindowMs: 600000,
+  maxChallengesPerIp: 3, challengeRounds: 2, challengeTries: 1, rateLimit: 60, rateWindowMs: 600000,
   challengeRateLimit: 10, sessionChallengeRateLimit: 5, intentTtlMs: 600000, requireIntent: false,
   requirePrivateImages: false, minPrivateImages: 32,
 });
@@ -42,7 +42,7 @@ export function resolveCaptchaOptions(options = {}) {
   const ranges = {
     powBits: [0, 28], tolerance: [1, 30], minSolveMs: [0, 600000], minTokenAgeMs: [0, 600000],
     tokenTtlMs: [1, 86400000], challengeTtlMs: [1, 86400000], powTtlMs: [1, 86400000],
-    maxChallengesPerIp: [1, 100], challengeTries: [1, 10], rateLimit: [1, 100000], rateWindowMs: [1, 86400000],
+    maxChallengesPerIp: [1, 100], challengeRounds: [1, 5], challengeTries: [1, 10], rateLimit: [1, 100000], rateWindowMs: [1, 86400000],
     challengeRateLimit: [1, 100000], sessionChallengeRateLimit: [1, 100000], intentTtlMs: [1, 86400000], minPrivateImages: [1, 100000],
   };
   for (const [key, [min, max]] of Object.entries(ranges)) if (!Number.isInteger(config[key]) || config[key] < min || config[key] > max) throw new TypeError(`${key} 必须是 ${min}–${max} 的整数`);
@@ -115,14 +115,14 @@ export function createCaptchaCore(options = {}, loadPictures) {
   }
   // 保留本轮最高风险报告；重置浏览器自报字段不能抹去此前观察到的风险。
   const higherRisk = (previous, current) => previous && previous.risk.score > current.risk.score ? previous : current;
-  async function mint(ctx, agentTicket, requestAssessment) {
+  async function mint(ctx, agentTicket, requestAssessment, solvedRounds = 0) {
     if (config.enabled) await enforceIp(ctx);
     const ttlMs = remaining(ctx, config.tokenTtlMs);
     if (ttlMs <= config.minTokenAgeMs) throw new CaptchaError('INTENT_INVALID', '业务验证凭据已过期，请重新开始', 403);
     await intents.markIssued(ctx);
     const agent = await agentLures.advance(ctx, agentTicket, ttlMs);
     const token = crypto.randomBytes(32).toString('hex');
-    await store.set(key('token', token), { ...ctx, agentTicket, ...(requestAssessment ? { requestAssessment } : {}), issuedAt: now(), expiresAt: now() + ttlMs }, ttlMs);
+    await store.set(key('token', token), { ...ctx, agentTicket, solvedRounds, ...(requestAssessment ? { requestAssessment } : {}), issuedAt: now(), expiresAt: now() + ttlMs }, ttlMs);
     return { token, expiresInMs: ttlMs, usableAfterMs: config.minTokenAgeMs, ...(agent ? { agent } : {}) };
   }
   async function release(ip, id) {
@@ -138,11 +138,8 @@ export function createCaptchaCore(options = {}, loadPictures) {
     }
     return result;
   }
-  async function challenge(ctx, agentTicket, requestAssessment) {
-    const id = crypto.randomBytes(16).toString('hex');
-    const ttlMs = remaining(ctx, config.challengeTtlMs), expiresAt = now() + ttlMs;
-    if (ttlMs <= config.minSolveMs) throw new CaptchaError('INTENT_INVALID', '业务验证凭据即将过期，请重新开始', 403);
-    // 发题预算不会因取消、失败、过期或更换 action 而退还。
+  async function spendChallengeBudget(ctx) {
+    // 每次开始一组新题扣一次预算；取消、失败、过期和更换 action 均不会退还。
     for (const [scope, identity, limit] of [['ip', ctx.ip, config.challengeRateLimit], ...(ctx.sessionHash ? [['session', ctx.sessionHash, config.sessionChallengeRateLimit]] : [])]) {
       const wait = await store.update(key('challenge-rate-' + scope, identity), previous => {
         const times = (previous ?? []).filter(time => now() - time < config.rateWindowMs);
@@ -152,6 +149,16 @@ export function createCaptchaCore(options = {}, loadPictures) {
       });
       if (wait) throw new CaptchaError('CHALLENGE_RATE_LIMITED', '更换验证图片过于频繁，请稍后再试', 429, { retryAfterMs: wait });
     }
+  }
+  async function challenge(ctx, agentTicket, requestAssessment, solved) {
+    const id = crypto.randomBytes(16).toString('hex');
+    const round = solved ? (solved.round ?? 1) + 1 : 1;
+    const expiresAt = Math.min(now() + config.challengeTtlMs, ctx.intentExpiresAt ?? Infinity, solved?.expiresAt ?? Infinity);
+    if (expiresAt - now() <= config.minSolveMs) {
+      if (solved) throw new CaptchaError('CHALLENGE_EXPIRED', '图片挑战已过期，请重新验证');
+      throw new CaptchaError('INTENT_INVALID', '业务验证凭据即将过期，请重新开始', 403);
+    }
+    if (!solved) await spendChallengeBudget(ctx);
     const reserved = await store.update(key('slots', ctx.ip), previous => {
       const list = (previous ?? []).filter(slot => slot.expiresAt > now());
       const allowed = list.length < config.maxChallengesPerIp;
@@ -160,11 +167,19 @@ export function createCaptchaCore(options = {}, loadPictures) {
     });
     if (!reserved) throw new CaptchaError('CHALLENGE_LIMIT', '未解挑战数量已达上限，请取消旧挑战或稍后重试', 429);
     try {
+      const earlier = solved?.pictureIndex;
+      const skipEarlier = pictures.length > 1 && Number.isInteger(earlier) && earlier >= 0 && earlier < pictures.length;
+      let pictureIndex = crypto.randomInt(pictures.length - Number(skipEarlier));
+      if (skipEarlier && pictureIndex >= earlier) pictureIndex++;
       const answer = crypto.randomInt(360);
-      const image = rotatePuzzleToPng(obscurePuzzle(pictures[crypto.randomInt(pictures.length)]), answer);
-      await store.set(key('challenge', id), { ...ctx, agentTicket, requestAssessment, answer, createdAt: now(), expiresAt, tries: config.challengeTries }, ttlMs);
+      const image = rotatePuzzleToPng(obscurePuzzle(pictures[pictureIndex]), answer);
+      const createdAt = now(), ttlMs = expiresAt - createdAt;
+      if (ttlMs <= config.minSolveMs) throw new CaptchaError('CHALLENGE_EXPIRED', '图片挑战已过期，请重新验证');
+      await store.set(key('challenge', id), { ...ctx, agentTicket, requestAssessment, round, pictureIndex, answer, createdAt, expiresAt, tries: config.challengeTries }, ttlMs);
       const agent = await agentLures.advance(ctx, agentTicket, ttlMs, id);
-      return { challenge: { id, image: `data:image/png;base64,${image.toString('base64')}`, expiresInMs: ttlMs, ...(agent ? { agent } : {}) } };
+      const expiresInMs = expiresAt - now();
+      if (expiresInMs <= 0) throw new CaptchaError('CHALLENGE_EXPIRED', '图片挑战已过期，请重新验证');
+      return { challenge: { id, image: `data:image/png;base64,${image.toString('base64')}`, expiresInMs, round, rounds: config.challengeRounds, ...(agent ? { agent } : {}) } };
     } catch (err) { await store.delete(key('challenge', id)); await release(ctx.ip, id); throw err; }
   }
   return {
@@ -231,7 +246,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
       if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id) || !Number.isFinite(angle) || Math.abs(angle) > 360000 || !['mouse', 'touch', 'pen', 'keyboard'].includes(pointer)) throw invalid();
       if (!agentDetected && !validSignals(trajectory, null, hints)) { await reputation(ctx.ip, true); throw invalid(); }
       const result = await store.update(key('challenge', id), record => {
-        if (!record) return { result: { code: 'CHALLENGE_EXPIRED' } };
+        if (!record || record.expiresAt <= now()) return { result: { code: 'CHALLENGE_EXPIRED' } };
         // 绑定不符只拒绝本次请求：保留挑战、剩余次数与 IP 名额，避免他人借此销毁有效挑战。
         if (!same(record, ctx)) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'BINDING_MISMATCH' } };
         if (record.agentDetected) return { value: record, ttlMs: record.expiresAt - now(), result: { code: 'BOT_DETECTED', source: record.agentDetected } };
@@ -243,20 +258,22 @@ export function createCaptchaCore(options = {}, loadPictures) {
         const behaviorPasses = assessment.passed;
         record.requestAssessment = higherRisk(record.requestAssessment, { risk: assessment.risk,
           dimensions: Object.fromEntries(['browser', 'timezone', 'headers', 'frequency', 'language'].map(name => [name, assessment.dimensions[name]])) });
-        if (behaviorPasses && Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { success: true, releaseIp: record.ip, agentTicket: record.agentTicket, requestAssessment: record.requestAssessment } };
+        if (behaviorPasses && Math.abs(angleDiff(angle, -record.answer)) <= tolerance) return { result: { solved: record, releaseIp: record.ip } };
         record.tries--;
         const code = !record.tries ? 'CHALLENGE_EXHAUSTED' : behaviorPasses ? 'ANGLE_INCORRECT' : 'BEHAVIOR_REJECTED';
         return { value: record.tries ? record : undefined, ttlMs: record.expiresAt - now(), result: { code, triesRemaining: record.tries, releaseIp: record.tries ? undefined : record.ip } };
       });
       if (result.releaseIp) await release(result.releaseIp, id);
-      if (!result.success) {
+      if (!result.solved) {
         // 正常松手可能早于最低等待时间；保留限流，但不把等待重试记作验证失败。
         if (result.code !== 'TOO_FAST' && !result.source) await reputation(ctx.ip, true);
         if (result.code === 'BOT_DETECTED') throw botDetected(result.source);
         const message = { ANGLE_INCORRECT: '方向还未回正，请微调后重试', BEHAVIOR_REJECTED: '操作轨迹异常，请重新拖动完成验证', TOO_FAST: '请稍等再提交' }[result.code] ?? '挑战无效或已过期，请重新验证';
         throw new CaptchaError(result.code, message, 400, { triesRemaining: result.triesRemaining, retryAfterMs: result.retryAfterMs });
       }
-      return mint(ctx, result.agentTicket, result.requestAssessment);
+      const solved = result.solved, solvedRounds = solved.round ?? 1;
+      if (solvedRounds < config.challengeRounds) return challenge(ctx, solved.agentTicket, solved.requestAssessment, solved);
+      return mint(ctx, solved.agentTicket, solved.requestAssessment, solvedRounds);
     },
     async cancelChallenge(input) {
       const { ctx } = await context(input);
@@ -274,6 +291,7 @@ export function createCaptchaCore(options = {}, loadPictures) {
         if (!record) return { result: false };
         // A mismatched IP/action must not invalidate a token bound to another context.
         if (!same(record, ctx)) return { value: record, ttlMs: record.expiresAt - now(), result: false };
+        if (config.enabled && (record.solvedRounds ?? 1) < config.challengeRounds) return { result: false };
         if (now() - record.issuedAt < config.minTokenAgeMs) return { value: record, ttlMs: record.expiresAt - now(), result: false };
         return { result: record };
       });

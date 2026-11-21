@@ -31,6 +31,51 @@ test('安全默认值限制单次答案；旧的多次重试仅由显式配置�
   await assert.rejects(f.captcha.solveChallenge(input), code('CHALLENGE_EXPIRED'));
 });
 
+test('默认两题共用有效期和发题预算，首题只产生一个绑定的后续挑战', async t => {
+  const { challengeRounds, challengeTries } = resolveCaptchaOptions();
+  assert.equal(challengeRounds, 2);
+  const f = fixture({ challengeRounds, challengeTries, challengeRateLimit: 1, requireIntent: true });
+  t.after(() => f.close());
+  const context = await bound(f);
+  const { challenge: first } = await verify(f.captcha, context);
+  assert.equal(first.round, 1);
+  const answer = challenge => ({ ...context, id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory });
+  f.advance(500);
+  const submitted = await Promise.allSettled([f.captcha.solveChallenge(answer(first)), f.captcha.solveChallenge(answer(first))]);
+  const accepted = submitted.find(result => result.status === 'fulfilled');
+  const rejected = submitted.find(result => result.status === 'rejected');
+  assert.ok(accepted && rejected);
+  assert.equal(rejected.reason.code, 'CHALLENGE_EXPIRED');
+  assert.equal(accepted.value.token, undefined);
+  const second = accepted.value.challenge;
+  assert.equal(second.round, 2);
+  assert.notEqual(second.id, first.id);
+  assert.equal(second.expiresInMs, first.expiresInMs - 500);
+  await assert.rejects(f.captcha.solveChallenge({ ...answer(second), ...(await bound(f, { intentId: 'different-operation' })) }), code('BINDING_MISMATCH'));
+  const { token } = await f.captcha.solveChallenge(answer(second));
+  assert.equal(await f.captcha.consumeToken({ ...context, token }), true);
+  assert.equal(await f.captcha.consumeToken({ ...context, token }), false);
+});
+
+test('末题答错会失效，重新发题回到首题且旧单题令牌无法消费', async t => {
+  const f = fixture({ challengeRounds: 2, challengeTries: 1 });
+  t.after(() => f.close());
+  const { challenge: first } = await verify(f.captcha);
+  const answer = challenge => ({ ...ctx, id: challenge.id, angle: -f.answer(challenge.id), trajectory: challengeTrajectory });
+  const { challenge: second } = await f.captcha.solveChallenge(answer(first));
+  const last = answer(second);
+  await assert.rejects(f.captcha.solveChallenge({ ...last, angle: last.angle + 90 }), code('CHALLENGE_EXHAUSTED'));
+  await assert.rejects(f.captcha.solveChallenge(last), code('CHALLENGE_EXPIRED'));
+  const { challenge: restarted } = await verify(f.captcha);
+  assert.equal(restarted.round, 1);
+  assert.equal((await f.captcha.solveChallenge(answer(restarted))).token, undefined);
+
+  const challengeKey = [...f.records.keys()].find(key => key.endsWith(':challenge:' + first.id));
+  const token = 'f'.repeat(64);
+  await f.store.set(challengeKey.replace(':challenge:' + first.id, ':token:' + token), { ...ctx, issuedAt: 100000, expiresAt: 101000 }, 1000);
+  assert.equal(await f.captcha.consumeToken({ ...ctx, token }), false);
+});
+
 test('取消、答错和更换 action 不退还发题预算；窗口结束才恢复', async t => {
   const f = fixture({ challengeRateLimit: 2, rateWindowMs: 1000, challengeTries: 1 }); t.after(() => f.close());
   const first = (await verify(f.captcha)).challenge;

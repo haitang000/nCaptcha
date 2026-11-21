@@ -82,7 +82,7 @@ npm run build:workers -- --images-dir ./.private-puzzles --private
 
 业务后端通过 Bearer 密钥调用 `POST /captcha/v1/intent`，发送真实访客 `{ip, action, sessionId, intentId}`；浏览器将返回的 `intent` 传给组件的 `intent` 选项。后端消费时向 `/siteverify` 发送同一服务端会话和操作标识。两个受保护接口都按请求体中由可信业务后端提供的访客 IP 路由；公开接口继续只采用 Cloudflare 平台 IP。绑定流程、前端回调和错误码见主 README 的“生产加固与会话绑定”。
 
-同一会话在一个 IP 所属对象内有独立发题预算，换 action 或 intentId 不会重置。跨 IP 的会话/账号总预算应在业务后端实施，验证码通过后业务接口也继续限流。
+同一会话在一个 IP 所属对象内有独立发题预算，每组新题扣一次，换 action 或 intentId 不会重置。默认连续通过两题后才签发 Token。跨 IP 的会话/账号总预算应在业务后端实施，验证码通过后业务接口也继续限流。
 
 本地也支持绝对路径；云端 CI 应使用随源码提供的相对目录。无有效 PNG 时构建失败。`CAPTCHA_IMAGES_DIR` 仅适用于 Node 服务，Workers 不读取服务器目录。内置 10 张图片用于示例，均按明确的上下方向线索筛选，可换成自己的题库；来源与筛选标准见 [题图库说明](../assets/puzzles/README.md)。
 

@@ -146,7 +146,9 @@ export function render(container, options = {}) {
   }
   function puzzle(challenge, signal) {
     return new Promise((resolve, reject) => {
-      if (!challenge || !/^[a-f0-9]{32}$/.test(challenge.id) || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(challenge.image)) { reject(new CaptchaClientError('服务端返回了不正确的图片挑战')); return; }
+      const validChallenge = value => value && /^[a-f0-9]{32}$/.test(value.id) && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.image) && Number.isFinite(value.expiresInMs) && value.expiresInMs > 0;
+      const invalidChallenge = () => new CaptchaClientError('服务端返回了不正确的图片挑战');
+      if (!validChallenge(challenge)) { reject(invalidChallenge()); return; }
       challengeId = challenge.id;
       agentSignal.update(challenge.agent);
       const dlg = document.createElement('dialog'); dialog = dlg; dlg.className = 'puzzle';
@@ -161,6 +163,11 @@ export function render(container, options = {}) {
       dlg.querySelector('.puzzle-logo').src = logo;
       root.append(dlg);
       const viewport = dlg.querySelector('.stage-viewport'), stage = dlg.querySelector('.stage'), img = dlg.querySelector('img'), range = dlg.querySelector('.range'), eyebrow = dlg.querySelector('.puzzle-eyebrow'), errEl = dlg.querySelector('.error-text');
+      const showProgress = () => {
+        eyebrow.textContent = Number.isInteger(challenge.round) && Number.isInteger(challenge.rounds) && challenge.rounds > 1
+          ? `安全验证 · 第 ${challenge.round} / ${challenge.rounds} 题` : '请进行安全验证';
+      };
+      showProgress();
       img.src = challenge.image;
       const challengeTracking = createChallengeTracking(dlg);
       let deg = 0, drag = null, rangeDrag = null, settled = false, submitting = false, keyboardAdjusting = false, rangeCancelled = false;
@@ -203,13 +210,15 @@ export function render(container, options = {}) {
         // 先释放旧题占用的名额，再出新题；重新计算 PoW，沿用服务端的限流与风控。
         const [, pow] = await Promise.all([request('/cancel', { id: challenge.id }, events.signal), prepareProof(events.signal)]);
         prepared = null;
-        const response = await request('/verify', { pow }, events.signal);
-        const next = response.challenge;
-        if (!next || !/^[a-f0-9]{32}$/.test(next.id) || !/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(next.image) || !Number.isFinite(next.expiresInMs) || next.expiresInMs <= 0) throw new CaptchaClientError('服务端返回了不正确的图片挑战');
+        await replaceChallenge(await request('/verify', { pow }, events.signal));
+      }
+      async function replaceChallenge({ challenge: next, roundTripMs }) {
+        if (!validChallenge(next)) throw invalidChallenge();
         if (settled) { releaseChallenge(next.id); return; }
+        clearTimeout(challengeTimer);
         challenge = next; challengeId = next.id;
         agentSignal.update(next.agent);
-        challengeTimer = setTimeout(expireChallenge, Math.max(1, next.expiresInMs - response.roundTripMs));
+        challengeTimer = setTimeout(expireChallenge, Math.max(1, next.expiresInMs - roundTripMs));
         // 解码完成后再换图，避免新图片滑入时出现空白。
         const preload = new Image(); preload.src = next.image;
         await preload.decode();
@@ -237,7 +246,7 @@ export function render(container, options = {}) {
         challengeTracking.reset();
         submitting = false; keyboardAdjusting = false; rangeCancelled = false; rangeDrag = null;
         range.disabled = false; stage.removeAttribute('aria-disabled'); delete stage.dataset.phase;
-        dlg.removeAttribute('aria-busy'); eyebrow.textContent = '请进行安全验证';
+        dlg.removeAttribute('aria-busy'); showProgress();
         range.focus({ preventScroll: true });
       }
       async function submit() {
@@ -253,7 +262,15 @@ export function render(container, options = {}) {
         const payload = { id: challenge.id, angle: Math.round(deg) % 360, ...behavior, hints: { ...tracking.getHints(), pointer: behavior.pointer } };
         try {
           for (let attempt = 0; attempt < 2; attempt++) {
-            try { result = prepareToken(await request('/challenge', payload, events.signal)); break; }
+            try {
+              const response = await request('/challenge', payload, events.signal);
+              if (response.challenge) {
+                await replaceChallenge(response);
+                return;
+              }
+              result = prepareToken(response);
+              break;
+            }
             catch (error) {
               // 松手比最低求解间隔早时等待剩余时间；不要求用户再次拖动。
               if (attempt === 0 && error.code === 'TOO_FAST' && Number.isFinite(error.retryAfterMs) && error.retryAfterMs > 0) { await delay(error.retryAfterMs + 25, events.signal); continue; }

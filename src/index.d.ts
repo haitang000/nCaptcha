@@ -59,7 +59,7 @@ export type AgentSource = 'fastpass' | 'compat-event' | 'canary-token' | 'fallba
 export interface AgentLures { ticket: string; token: string; expiresInMs: number }
 export interface Pow { prefix: string; bits: number; expiresInMs: number; agent?: AgentLures }
 export interface TokenResult { token: string; expiresInMs: number; usableAfterMs: number; agent?: AgentLures }
-export interface Challenge { id: string; image: string; expiresInMs: number; agent?: AgentLures }
+export interface Challenge { id: string; image: string; expiresInMs: number; round?: number; rounds?: number; agent?: AgentLures }
 export type StateChange<T, R> = { value: T; ttlMs: number; result?: R } | { value?: undefined; ttlMs?: number; result?: R };
 /** update 必须保证同一 key 的原子读改写；传给 updater 的对象须隔离，过期视为 undefined。
  * updater 为同步纯函数，返回 undefined value 表示删除。ttlMs 从提交时刻起算。
@@ -76,7 +76,9 @@ export interface CaptchaOptions {
   enabled?: boolean; mode?: Mode; powBits?: number; tolerance?: number;
   minSolveMs?: number; minTokenAgeMs?: number; tokenTtlMs?: number; challengeTtlMs?: number; powTtlMs?: number;
   maxChallengesPerIp?: number; challengeTries?: number; rateLimit?: number; rateWindowMs?: number;
-  /** 默认每题仅允许一次答案提交；发题预算覆盖失败、取消和跨 action 换题。 */
+  /** 默认连续通过两题后签发令牌。 */
+  challengeRounds?: number;
+  /** 每组新题扣一次预算；失败、取消和更换 action 不退还。 */
   challengeRateLimit?: number; sessionChallengeRateLimit?: number;
   /** requireIntent 默认 false 以兼容现有接入；生产应开启。 */
   requireIntent?: boolean; intentTtlMs?: number;
@@ -97,8 +99,8 @@ export interface CaptchaInstance {
   /** 命中诱饵时标记该轮次并以 BOT_DETECTED 拒绝；重复上报不重复计罚。 */
   reportAgent(input: Context & { ticket: string; source: AgentSource; token?: string }): Promise<never>;
   verifyBehavior(input: Context & RequestMetadata & AgentSignal & { pow?: { prefix: string; nonce: string }; trajectory?: Point[] | null; formBehavior?: FormBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
-  /** 指针操作需本轮轨迹；键盘操作还需可重放到提交角度的 keyboard 记录。 */
-  solveChallenge(input: Context & RequestMetadata & AgentSignal & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult>;
+  /** 指针操作需本轮轨迹；键盘操作还需可重放到提交角度的 keyboard 记录。最后一题通过后返回令牌。 */
+  solveChallenge(input: Context & RequestMetadata & AgentSignal & { id: string; angle: number; pointer?: Pointer; trajectory?: Point[] | null; keyboard?: KeyboardBehavior | null; hints?: Hints | null }): Promise<TokenResult | { challenge: Challenge }>;
   cancelChallenge(input: Context & { id: string }): Promise<boolean>;
   consumeToken(input: Context & Partial<IntentBinding> & { token: string }): Promise<boolean>;
   setMode(mode: Mode): void;

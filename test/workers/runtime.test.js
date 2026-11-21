@@ -87,13 +87,21 @@ async function issue(ip, action = 'login') {
   return (await response.json()).challenge;
 }
 async function dbFor(ip) { return mf.unsafeGetDurableObjectStorage('captcha', 'CaptchaDurableObject', { name: ip }); }
-async function solve(ip, action = 'login') {
-  const challenge = await issue(ip, action);
+async function challengeAnswer(ip, id) {
   const db = await dbFor(ip);
-  const row = (await db.exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
-  const response = await post('/challenge', { action, id: challenge.id, angle: -JSON.parse(row.value).answer, trajectory: challengeTrajectory }, ip);
+  const [row] = await db.exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + id);
+  return -JSON.parse(row.value).answer;
+}
+async function submitAnswer(ip, context, challenge) {
+  const angle = await challengeAnswer(ip, challenge.id);
+  const response = await post('/challenge', { ...context, id: challenge.id, angle, trajectory: challengeTrajectory }, ip);
   assert.equal(response.status, 200, await response.clone().text());
   return response.json();
+}
+async function solve(ip, action = 'login', challenge = undefined) {
+  let result = { challenge: challenge ?? await issue(ip, action) };
+  while (result.challenge) result = await submitAnswer(ip, { action }, result.challenge);
+  return result;
 }
 
 test('真实 Workers 意图贯穿 PoW、图片和 Token，DO 重建仍核对会话且拒绝重放', async () => {
@@ -106,8 +114,11 @@ test('真实 Workers 意图贯穿 PoW、图片和 Token，DO 重建仍核对会�
   const pow = await (await post('/pow', publicContext, ip)).json();
   await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
   const { challenge } = await (await post('/verify', { ...publicContext, pow: { prefix: pow.prefix, nonce: nonceFor(pow) } }, ip)).json();
-  const row = (await (await dbFor(ip)).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
-  const { token } = await (await post('/challenge', { ...publicContext, id: challenge.id, angle: -JSON.parse(row.value).answer, trajectory: challengeTrajectory }, ip)).json();
+  const first = await submitAnswer(ip, publicContext, challenge);
+  assert.equal(first.token, undefined);
+  assert.equal(first.challenge.round, 2);
+  await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
+  const { token } = await submitAnswer(ip, publicContext, first.challenge);
   assert.ok(token);
   await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
   assert.deepEqual(await (await post('/siteverify', { ...binding, token, sessionId: 'wrong-session' }, ip, auth)).json(), { success: false });
@@ -157,8 +168,7 @@ test('真实 workerd 的 ABCD 来源可识别，假令牌在 Durable Object 重�
     assert.equal((await replay.json()).code, 'BOT_DETECTED');
   }
   const challenge = await issue(ip);
-  const row = (await (await dbFor(ip)).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
-  const solved = await (await post('/challenge', { action: 'login', id: challenge.id, angle: -JSON.parse(row.value).answer, trajectory: challengeTrajectory }, ip)).json();
+  const solved = await solve(ip, 'login', challenge);
   assert.ok(solved.token);
   await mf.unsafeEvictDurableObject('captcha', 'CaptchaDurableObject', { name: ip });
   const auth = { Authorization: `Bearer ${secret}` };
@@ -194,7 +204,7 @@ test('Workers 使用同一多维评测，拒绝抖动采样恒速与混合键盘
     assert.equal(error.code, 'BEHAVIOR_REJECTED'); assert.equal(error.triesRemaining, 2);
     assert.equal(error.dimensions, undefined);
     const retry = await post('/challenge', { id: challenge.id, action: 'login', angle, trajectory: challengeTrajectory }, ip);
-    assert.equal(retry.status, 200); assert.ok((await retry.json()).token);
+    assert.equal(retry.status, 200); assert.equal((await retry.json()).challenge.round, 2);
   }
 });
 test('真实 Durable Object 驱逐/重建后仍保留令牌；过期状态不通过', async () => {
@@ -268,7 +278,7 @@ test('Workers 不再提供 Demo 页面与公开核验入口，业务令牌仍通
   const businessCheck = await post('/siteverify', { token: business.token, ip, action: 'register' }, ip, { Authorization: `Bearer ${secret}` });
   assert.equal((await businessCheck.json()).success, true);
 });
-test('浏览器从真实 Workers 资源加载 UI，完成图片验证并由业务后端消费', async () => {
+test('浏览器从真实 Workers 加载 UI，连续两题后才由业务后端消费令牌', async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
@@ -284,9 +294,14 @@ test('浏览器从真实 Workers 资源加载 UI，完成图片验证并由业�
     const response = await verified;
     assert.equal(response.status(), 200, await response.text());
     const { challenge } = await response.json();
-    const row = (await (await dbFor('127.0.0.1')).exec('SELECT value FROM captcha_state WHERE key = ?', 'captcha:challenge:' + challenge.id))[0];
-    const angle = (360 - JSON.parse(row.value).answer) % 360;
-    await rotateByKeyboard(page.locator('input[type=range]'), angle);
+    const range = page.locator('input[type=range]');
+    const continued = page.waitForResponse(response => response.url().endsWith('/captcha/v1/challenge') && response.status() === 200);
+    await rotateByKeyboard(range, (360 + await challengeAnswer('127.0.0.1', challenge.id)) % 360);
+    const first = await (await continued).json();
+    assert.equal(first.token, undefined);
+    await page.getByText('安全验证 · 第 2 / 2 题').waitFor();
+    assert.equal(await page.evaluate(() => widget.getToken()), null);
+    await rotateByKeyboard(range, (360 + await challengeAnswer('127.0.0.1', first.challenge.id)) % 360);
     await page.waitForFunction(() => !!window.token);
     const token = await page.evaluate(() => widget.getToken());
     assert.equal((await (await post('/siteverify', { token, ip: '127.0.0.1', action: 'browser' }, '203.0.113.99', { Authorization: `Bearer ${secret}` })).json()).success, true);

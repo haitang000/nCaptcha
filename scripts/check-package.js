@@ -32,6 +32,7 @@ const memory = createMemoryStore();
 let answer;
 const store = { ...memory, async set(key, value, ttl) { if (key.includes(':challenge:')) answer = value.answer; return memory.set(key, value, ttl); } };
 const c = createCaptcha({ store, powBits:0, minSolveMs:0, minTokenAgeMs:0 });
+const submit = (ctx, challenge) => c.solveChallenge({...ctx,id:challenge.id,angle:-answer,trajectory:[{x:0,y:0,t:0},{x:20,y:0,t:40},{x:25,y:0,t:100}]});
 assert.equal(assessChallengeBehavior({angle:0,trajectory:[{x:0,y:0,t:0},{x:1,y:0,t:45},{x:2,y:0,t:130}]},{elapsedMs:1000}).passed,true);
 const handler = createHttpHandler(c);
 const server = http.createServer(async (req,res)=>{ if (!await handler(req,res)) { res.writeHead(404);res.end(); } });
@@ -48,7 +49,9 @@ try {
   const next = await c.createPow(ctx);
   const checked = await c.verifyBehavior({...ctx,pow:{prefix:next.prefix,nonce:'0'},formBehavior:{totalMs:5000,focusOrder:['a','b'],fields:{a:{n:6,meanGap:100,varGap:300},b:{n:6,meanGap:100,varGap:300}}}});
   assert.ok(checked.challenge); assert.equal(checked.token, undefined);
-  const result = await c.solveChallenge({...ctx,id:checked.challenge.id,angle:-answer,trajectory:[{x:0,y:0,t:0},{x:20,y:0,t:40},{x:25,y:0,t:100}]});
+  const continued = await submit(ctx, checked.challenge);
+  assert.equal(continued.token, undefined); assert.equal(continued.challenge.round, 2);
+  const result = await submit(ctx, continued.challenge);
   assert.equal(await c.consumeToken({...ctx,token:result.token}),true);
   assert.equal(await c.consumeToken({...ctx,token:result.token}),false);
   const binding = {...ctx,sessionId:'package-server-session',intentId:'package-server-operation'};
@@ -56,7 +59,8 @@ try {
   const boundContext = {...ctx,intent};
   const boundPow = await c.createPow(boundContext);
   const boundChallenge = (await c.verifyBehavior({...boundContext,pow:{prefix:boundPow.prefix,nonce:'0'}})).challenge;
-  const boundResult = await c.solveChallenge({...boundContext,id:boundChallenge.id,angle:-answer,trajectory:[{x:0,y:0,t:0},{x:20,y:0,t:40},{x:25,y:0,t:100}]});
+  const boundNext = await submit(boundContext, boundChallenge);
+  const boundResult = await submit(boundContext, boundNext.challenge);
   assert.equal(await c.consumeToken({...binding,sessionId:'another-session',token:boundResult.token}),false);
   assert.equal(await c.consumeToken({...binding,token:boundResult.token}),true);
   assert.equal(await c.consumeToken({...binding,token:boundResult.token}),false);
